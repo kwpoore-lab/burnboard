@@ -339,7 +339,7 @@ let building = false;
 let rollupReady = false;
 let buildProgress = { done: 0, total: 0 };
 
-const ROLLUP_VERSION = 18;   // bump to force a full re-scan when the parser changes
+const ROLLUP_VERSION = 19;   // bump to force a full re-scan when the parser changes
 function loadRollupCache() {
   try {
     const j = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
@@ -782,19 +782,24 @@ function hourCommandTrend(base, recs) {
   const series = { outTokens: {}, calls: {}, truncated: {}, delta: {} };
   const bump = (k, b, v) => { series[k][b] = (series[k][b] || 0) + v; };
   const sampMap = new Map();
+  const pollMap = new Map();
   const totals = { outTokens: 0, calls: 0, truncated: 0, delta: 0, sessions: 0 };
   const sessionIds = new Set();
+  const tally = (map, key, c, b) => {
+    const e = map.get(key) || (map.set(key, { cmd: key, count: 0, out: 0, trunc: 0, per: {} }).get(key));
+    e.count++; e.out += c.o; e.trunc += c.tr;
+    const pb = e.per[b] || (e.per[b] = { outTokens: 0, calls: 0, truncated: 0 });
+    pb.outTokens += c.o; pb.calls++; pb.truncated += c.tr;
+  };
   for (const [r, c] of hourCommands(recs, base)) {
     const b = bucketKey('hour', c.t);
     buckets.add(b);
     sessionIds.add(r.id);
     bump('outTokens', b, c.o); bump('calls', b, 1); bump('truncated', b, c.tr); bump('delta', b, c.k);
     totals.outTokens += c.o; totals.calls++; totals.truncated += c.tr; totals.delta += c.k;
-    const key = c.c || base;
-    const e = sampMap.get(key) || (sampMap.set(key, { cmd: key, count: 0, out: 0, trunc: 0, per: {} }).get(key));
-    e.count++; e.out += c.o; e.trunc += c.tr;
-    const pb = e.per[b] || (e.per[b] = { outTokens: 0, calls: 0, truncated: 0 });
-    pb.outTokens += c.o; pb.calls++; pb.truncated += c.tr;
+    tally(sampMap, c.c || base, c, b);
+    // polls are interesting for *what* they were waiting on, not the poll call
+    if (c.g) tally(pollMap, c.g, c, b);
   }
   totals.sessions = sessionIds.size;
   return {
@@ -804,8 +809,8 @@ function hourCommandTrend(base, recs) {
     buckets: [...buckets].sort(),
     series,
     totals,
-    samples: [...sampMap.values()].sort((a, b) => b.out - a.out || b.count - a.count).slice(0, 12),
-    polls: [],
+    samples: [...sampMap.values()].sort((a, b) => b.out - a.out || b.count - a.count).slice(0, 15),
+    pollTargets: [...pollMap.values()].sort((a, b) => b.out - a.out || b.count - a.count).slice(0, 12),
     facets: rollupFacets(),
   };
 }
