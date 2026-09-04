@@ -47,7 +47,11 @@
   .badge.model { color: var(--mcol, var(--accent)); border-color: color-mix(in srgb, var(--mcol, var(--accent)) 45%, var(--border));
     background: color-mix(in srgb, var(--mcol, var(--accent)) 14%, var(--panel2));
     display: inline-flex; align-items: center; gap: 5px; }
-  .mlogo { width: 11px; height: 11px; display: block; flex: none; }
+  .mlogo { width: 11px; height: 11px; display: block; flex: none; pointer-events: none; }
+  .badge.src-codex, .badge.src-claude { display: inline-flex; align-items: center; gap: 5px; }
+  #srcSeg button { display: inline-flex; align-items: center; gap: 5px; }
+  .facetmark { display: inline-flex; vertical-align: -2px; margin-left: 8px; }
+  .facetmark + select.facet { margin-left: 4px; }
   .mmark { display: inline-flex; vertical-align: -2px; margin-right: 4px; }
   .badge.tier { color: var(--purple); }
   .badge.review { color: var(--yellow); }
@@ -225,7 +229,7 @@
     <a href="#economy" data-tab="economy">Economy</a>
   </nav>
   <span class="seg" id="srcSeg" title="which agent's sessions to show">
-    <button data-src="" class="on">All agents</button><button data-src="codex">Codex</button><button data-src="claude">Claude Code</button>
+    <button data-src="" class="on">All agents</button><button data-src="codex" id="srcCodex">Codex</button><button data-src="claude" id="srcClaude">Claude Code</button>
   </span>
   <span id="conn"></span>
   <span class="stat" id="hdrstat">connecting…</span>
@@ -486,7 +490,8 @@ function renderUsage(snap) {
 // Live tree — one hierarchy spanning "prompts running now" + "other live"
 // ---------------------------------------------------------------------------
 const SRC_LABEL = { codex: 'Codex', claude: 'Claude Code' };
-const srcBadge = (id) => id ? `<span class="badge src-${esc(id)}">${esc(SRC_LABEL[id] || id)}</span>` : '';
+const SRC_MARK = { codex: OPENAI_MARK, claude: CLAUDE_MARK };
+const srcBadge = (id) => id ? `<span class="badge src-${esc(id)}">${SRC_MARK[id] || ''}${esc(SRC_LABEL[id] || id)}</span>` : '';
 let srcFilter = '';        // '' = all agents | 'codex' | 'claude'
 let runSort = 'started';   // 'started' | 'tokens', both descending
 let lastRunOrder = [];     // root ids in the order last rendered
@@ -855,7 +860,7 @@ async function loadHistory() {
     return;
   }
   histAll = r.sessions || [];
-  fillFacet($('#histModel'), r.facets && r.facets.models, histModel, 'all models');
+  fillFacet($('#histModel'), r.facets && r.facets.models, histModel, 'all models', true);
   fillFacet($('#histEffort'), r.facets && r.facets.efforts, histEffort, 'all efforts');
   rebuildPeriodSelect();
   renderHistory();
@@ -910,9 +915,14 @@ function renderHistory() {
         : t.prompt ? short(t.prompt.replace(/\s+/g, ' '), 60) : t.id.slice(0, 8));
       const kd = t.isSubagent ? (t.agentKind || 'subagent') : 'main';
       const kind = kd + (t.agentNickname ? ' · ' + esc(t.agentNickname) : '');
-      const rest = [t.effort ? 'effort:' + t.effort : null, t.autoReview ? '+review' : null].filter(Boolean).join(' ');
-      const models = t.model
-        ? `${modelMark(t.model, t.source)}<span style="color:${modelStyle(t.model, t.source).color}">${esc(t.model)}</span>${rest ? ' ' + esc(rest) : ''}`
+      // guardian rows carry no model of their own — label them as Codex's reviewer
+      const guardian = !t.model && (t.autoReview || t.isSubagent && t.agentKind === 'guardian');
+      const mdl = t.model || (guardian ? 'codex-auto-review' : '');
+      const mlabel = t.model || (guardian ? 'codex reviewer' : '');
+      const rest = [t.effort ? 'effort:' + t.effort : null,
+        t.autoReview && !guardian ? '+review' : null].filter(Boolean).join(' ');
+      const models = mdl
+        ? `${modelMark(mdl, t.source)}<span style="color:${modelStyle(mdl, t.source).color}">${esc(mlabel)}</span>${rest ? ' ' + esc(rest) : ''}`
         : (esc(rest) || '–');
       const par = t.parent && (t.parent.title || t.parent.id);
       return `<tr onclick="openDetail('${t.id}')" style="cursor:pointer">
@@ -967,7 +977,9 @@ async function openDetail(id) {
     <dl class="kv">
       <dt>project</dt><dd>${esc(s.cwd || '–')}</dd>
       <dt>git</dt><dd>${s.git ? esc((s.git.repo || '') + ' @ ' + s.git.branch + ' (' + s.git.commit + ')') : '–'}</dd>
-      <dt>model</dt><dd>${s.primaryModel ? modelBadge(s.primaryModel, s.source) : '–'}${s.autoReview ? ' + auto-review' : ''}</dd>
+      <dt>model</dt><dd>${s.primaryModel ? modelBadge(s.primaryModel, s.source)
+        : s.autoReview ? modelMark('codex-auto-review', s.source) + 'codex reviewer' : '–'}${
+        s.primaryModel && s.autoReview ? ' + auto-review' : ''}</dd>
       <dt>effort / tier</dt><dd>${esc(s.effort || '–')} / ${esc(s.serviceTier || '–')}</dd>
       <dt>client</dt><dd>${esc(s.originator || '–')} · ${esc(s.cliVersion || '')}</dd>
       <dt>kind</dt><dd>${s.isSubagent ? (esc(s.agentKind || 'subagent') + (s.depth ? ' · depth ' + s.depth : '')) : 'main'}</dd>
@@ -1056,12 +1068,27 @@ let trModel = '', trEffort = '';
 const tExpanded = { cmd: new Set(), prompt: new Set() };
 
 // populate a <select> with "All …" + options, preserving the current value
-function fillFacet(sel, values, cur, allLabel) {
+function fillFacet(sel, values, cur, allLabel, isModel) {
   if (!sel) return;
   const want = cur || '';
   sel.innerHTML = `<option value="">${allLabel}</option>` +
-    (values || []).map(v => `<option value="${attr(v)}"${v === want ? ' selected' : ''}>${esc(v)}</option>`).join('');
+    (values || []).map(v => `<option value="${attr(v)}"${v === want ? ' selected' : ''}${
+      isModel ? ` style="color:${modelStyle(v).color}"` : ''}>${esc(v)}</option>`).join('');
   sel.value = want;
+  if (isModel) facetMark(sel, want);
+}
+// a <select> can't hold an SVG, so the mark for the chosen model sits beside it
+function facetMark(sel, model) {
+  let el = sel.previousElementSibling;
+  if (!el || !el.classList.contains('facetmark')) {
+    el = document.createElement('span');
+    el.className = 'facetmark';
+    sel.parentNode.insertBefore(el, sel);
+  }
+  const mi = modelStyle(model);
+  el.innerHTML = mi.mark || '';
+  el.style.color = mi.color;
+  sel.style.color = model ? mi.color : '';
 }
 const facetQS = (m, e) => (m ? `&model=${encodeURIComponent(m)}` : '') + (e ? `&effort=${encodeURIComponent(e)}` : '')
   + (srcFilter ? `&source=${encodeURIComponent(srcFilter)}` : '');
@@ -1078,7 +1105,7 @@ async function loadTrends() {
     return;
   }
   trendData = r;
-  fillFacet($('#trModel'), r.facets && r.facets.models, trModel, 'all models');
+  fillFacet($('#trModel'), r.facets && r.facets.models, trModel, 'all models', true);
   fillFacet($('#trEffort'), r.facets && r.facets.efforts, trEffort, 'all efforts');
   renderTrends();
 }
@@ -1326,8 +1353,13 @@ function ctPanel(base) {
   const seg = (name, cur, opts) => `<span class="seg" data-ct-seg="${name}">${opts.map(o =>
     `<button data-ct-${name}="${o.k}" class="${o.k === cur ? 'on' : ''}">${esc(o.label)}</button>`).join('')}</span>`;
   const fac = (s.data && s.data.facets) || { models: [], efforts: [] };
-  const facSel = (kind, cur, vals, allLabel) => `<select data-ct-${kind} class="facet">
-    <option value="">${allLabel}</option>${vals.map(v => `<option value="${attr(v)}"${v === cur ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select>`;
+  const facSel = (kind, cur, vals, allLabel) => {
+    const isModel = kind === 'model';
+    return `${isModel && cur ? modelMark(cur) : ''}<select data-ct-${kind} class="facet"${
+      isModel && cur ? ` style="color:${modelStyle(cur).color}"` : ''}>
+    <option value="">${allLabel}</option>${vals.map(v => `<option value="${attr(v)}"${v === cur ? ' selected' : ''}${
+      isModel ? ` style="color:${modelStyle(v).color}"` : ''}>${esc(v)}</option>`).join('')}</select>`;
+  };
   const ctrls = `<div class="ct-ctrls" data-ct-base="${esc(base)}">
     ${seg('period', s.period, [{ k: 'hour', label: 'Hour' }, { k: 'day', label: 'Day' }, { k: 'week', label: 'Week' }, { k: 'month', label: 'Month' }])}
     ${seg('metric', s.metric, CT_METRICS)}
@@ -1463,7 +1495,7 @@ async function loadEconomy() {
     return;
   }
   ecoData = r;
-  fillFacet($('#ecoModel'), r.facets && r.facets.models, ecoModel, 'all models');
+  fillFacet($('#ecoModel'), r.facets && r.facets.models, ecoModel, 'all models', true);
   fillFacet($('#ecoEffort'), r.facets && r.facets.efforts, ecoEffort, 'all efforts');
   renderEconomy();
 }
@@ -1605,6 +1637,10 @@ $('#srcSeg').addEventListener('click', (e) => {
   if (curTab === 'economy') loadEconomy();
   trendData = null; ecoData = null;   // force a refetch when those tabs open
 });
+
+// the agent filter carries the same marks as the panels it filters
+$('#srcCodex').insertAdjacentHTML('afterbegin', OPENAI_MARK);
+$('#srcClaude').insertAdjacentHTML('afterbegin', CLAUDE_MARK);
 
 connect();
 showTab(location.hash.slice(1) || 'running');
