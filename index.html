@@ -1,0 +1,1503 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>codexmon</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2230; --border: #2a3240;
+    --fg: #e6edf3; --dim: #8b98a5; --accent: #58a6ff; --green: #3fb950;
+    --yellow: #d29922; --red: #f85149; --purple: #bc8cff;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px;
+    border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .5px; }
+  header h1 a { color: var(--fg); text-decoration: none; }
+  header h1 a:hover { color: var(--accent); text-decoration: none; }
+  header .stat { color: var(--dim); font-size: 12px; margin-left: auto; }
+  #tabs { display: flex; gap: 4px; }
+  #tabs a { color: var(--dim); font-size: 13px; padding: 5px 12px; border-radius: 6px; text-decoration: none; }
+  #tabs a:hover { color: var(--fg); background: var(--panel); }
+  #tabs a.on { color: var(--fg); background: var(--panel2); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .seg button { background: var(--panel); color: var(--dim); border: 0; padding: 4px 12px; font: inherit;
+    font-size: 12px; cursor: pointer; }
+  .seg button.on { background: var(--accent); color: #04121f; }
+  #livePause { background: var(--panel); color: var(--dim); border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 12px; font: inherit; font-size: 12px; cursor: pointer; margin-right: 10px; }
+  #livePause.on { background: var(--yellow); color: #04121f; border-color: var(--yellow); }
+  #conn { width: 8px; height: 8px; border-radius: 50%; background: var(--red); display: inline-block; }
+  #conn.ok { background: var(--green); }
+  main { padding: 18px 20px 60px; max-width: 1240px; margin: 0 auto; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim);
+    margin: 26px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  h2:first-child { margin-top: 6px; }
+  .badge { font: 11px/1.4 var(--mono); background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 6px; color: var(--dim); white-space: nowrap; }
+  .badge.model { color: var(--accent); border-color: #24406a; }
+  .badge.tier { color: var(--purple); }
+  .badge.review { color: var(--yellow); }
+  .badge.agent { color: var(--purple); border-color: #4a3a6a; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .dot.running { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot.idle { background: var(--yellow); }
+  .dot.stale { background: var(--dim); }
+
+  /* focus panel — one per active agent */
+  .focus { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--green);
+    border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+  .focus-wrap { position: relative; }
+  .focus-wrap .tree-tick { position: absolute; left: -14px; top: 22px; width: 12px; height: 1px;
+    background: var(--border); }
+  .focus-wrap .tree-tick::before { content: ''; position: absolute; left: 0; bottom: 0;
+    width: 1px; height: 34px; background: var(--border); }
+  .focus.nested { border-left-color: var(--purple); background: var(--panel2); }
+  .focus.nested .ftitle { font-size: 13.5px; }
+  .fhead { display: flex; align-items: center; gap: 8px; cursor: pointer; flex-wrap: wrap; }
+  .caret { display: inline-block; color: var(--dim); font-size: 11px; transition: transform .12s; width: 10px; }
+  .focus.expanded .caret { transform: rotate(90deg); }
+  .fhead-tok { margin-left: auto; font: 11.5px/1 var(--mono); color: var(--dim); white-space: nowrap; }
+  .tl-link { font-size: 11.5px; }
+  .fhead-tok + .tl-link { margin-left: 12px; }
+  .ftitle { font-size: 15px; font-weight: 600; }
+  .fmeta { color: var(--dim); font-size: 12px; margin: 4px 0 2px; padding-left: 18px; }
+  .promptmini { font-size: 12.5px; color: var(--fg); padding-left: 18px; margin: 2px 0 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .82; }
+  .lineage { font-size: 11.5px; color: var(--dim); padding-left: 18px; margin: 2px 0; }
+  .lineage .sep { color: var(--border); margin: 0 2px; }
+  .lineage b { color: var(--fg); font-weight: 600; }
+  .fdetail { display: none; margin-top: 8px; }
+  .focus.expanded .fdetail { display: block; }
+  .fpath { font-family: var(--mono); font-size: 11px; color: var(--dim); word-break: break-all; }
+  .prompt { margin: 10px 0; padding: 9px 11px; background: var(--panel2); border-radius: 6px;
+    border-left: 2px solid var(--accent); }
+  .prompt .lbl { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .6px; }
+  .prompt p { margin: 3px 0 0; white-space: pre-wrap; max-height: 130px; overflow: auto; }
+  .statline { display: flex; gap: 16px; flex-wrap: wrap; font: 12px/1.5 var(--mono); color: var(--dim);
+    margin: 8px 0; }
+  .statline b { color: var(--fg); font-weight: 600; }
+  .chartwrap { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px 4px; margin: 8px 0; }
+  .chart { width: 100%; display: block; }
+  .chart text { fill: var(--dim); font: 10px var(--mono); }
+  .cols { display: grid; grid-template-columns: 1.35fr 1fr; gap: 14px; margin-top: 12px; }
+  @media (max-width: 860px) { .cols { grid-template-columns: 1fr; } }
+  .subh { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--dim); margin: 0 0 6px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 5px 9px; border-bottom: 1px solid var(--border); font-size: 12.5px;
+    vertical-align: top; }
+  th { color: var(--dim); font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+  tr:hover td { background: var(--panel); }
+  .num { font-family: var(--mono); text-align: right; white-space: nowrap; }
+  td.cmd { font-family: var(--mono); font-size: 11px; word-break: break-all; }
+  td.base { font-family: var(--mono); color: var(--accent); white-space: nowrap; }
+  .cmdscroll { max-height: 360px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+  #live { display: flex; flex-direction: column; gap: 8px; max-width: 620px; }
+  .card-wrap { position: relative; margin-bottom: 8px; }
+  .card-wrap .tree-tick { position: absolute; left: -13px; top: 20px; width: 11px; height: 1px; background: var(--border); }
+  .card-wrap .tree-tick::before { content: ''; position: absolute; left: 0; bottom: 0; width: 1px; height: 26px; background: var(--border); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 11px 13px;
+    cursor: pointer; }
+  .card.sub { border-left: 3px solid var(--purple); background: var(--panel2); }
+  .card.synthetic { border-style: dashed; opacity: .8; padding: 8px 12px; }
+  .card.running { border-left: 3px solid var(--green); }
+  .card.idle { border-left: 3px solid var(--yellow); }
+  .card.stale { opacity: .6; }
+  .card .title { font-weight: 600; }
+  .card .meta { color: var(--dim); font-size: 12px; margin-top: 3px; }
+  .bar { height: 5px; background: var(--panel2); border-radius: 3px; overflow: hidden; margin: 7px 0 3px; }
+  .bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--purple)); }
+  .tok { display: flex; gap: 10px; font: 11px/1.4 var(--mono); color: var(--dim); flex-wrap: wrap; }
+  .empty { color: var(--dim); padding: 16px 0; }
+  select { background: var(--panel); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 5px; padding: 5px 8px; font: inherit; }
+
+  #overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; z-index: 20; }
+  #overlay.on { display: block; }
+  #detail { position: absolute; right: 0; top: 0; bottom: 0; width: min(780px, 94vw);
+    background: var(--bg); border-left: 1px solid var(--border); overflow-y: auto; padding: 18px 22px; }
+  .close { position: absolute; right: 16px; top: 12px; cursor: pointer; color: var(--dim); font-size: 22px; }
+  .ev { border-left: 2px solid var(--border); padding: 5px 0 5px 12px; margin: 4px 0; }
+  .ev .et { font: 10px/1.4 var(--mono); color: var(--dim); }
+  .ev.user { border-color: var(--accent); } .ev.assistant { border-color: var(--green); }
+  .ev.tool { border-color: var(--purple); } .ev.reasoning { border-color: var(--yellow); }
+  .ev pre { margin: 3px 0 0; white-space: pre-wrap; word-break: break-word; font-family: var(--mono);
+    font-size: 11.5px; background: var(--panel); padding: 7px 9px; border-radius: 4px;
+    max-height: 260px; overflow: auto; }
+  .kv { display: grid; grid-template-columns: 120px 1fr; gap: 3px 10px; font-size: 12px; margin: 10px 0; }
+  .kv dt { color: var(--dim); } .kv dd { margin: 0; font-family: var(--mono); font-size: 11.5px; }
+
+  /* sortable tables */
+  th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+  th.sortable:hover { color: var(--fg); }
+  th.sortable::after { content: ' ↕'; opacity: .3; }
+  th.sortable.asc::after { content: ' ↑'; opacity: 1; }
+  th.sortable.desc::after { content: ' ↓'; opacity: 1; }
+
+  /* trends */
+  .tgrand { display: flex; gap: 20px; flex-wrap: wrap; font: 12px/1.5 var(--mono); color: var(--dim);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; }
+  .tgrand b { color: var(--fg); }
+  .tcols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px; }
+  @media (max-width: 1000px) { .tcols { grid-template-columns: 1fr; } }
+  .tfilter { width: 100%; margin: 4px 0 8px; }
+  .trow-detail td { background: var(--panel2); }
+  .trend-cell { width: 130px; }
+  .spark { display: block; }
+  .spark rect { fill: var(--accent); }
+  .lbl-row td { font-size: 11px; color: var(--dim); font-family: var(--mono); }
+
+  /* HTML bar chart (no SVG text distortion) */
+  .bchart { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px 4px; margin: 8px 0; }
+  .bc-title { font: 11px/1.4 var(--mono); color: var(--dim); margin-bottom: 5px; }
+  .bc-title .bc-l2 { color: var(--purple); }
+  .bc-body { display: flex; gap: 6px; }
+  .bc-yax { display: flex; flex-direction: column; justify-content: space-between; width: 46px;
+    height: 150px; font: 10px/1 var(--mono); color: var(--dim); text-align: right; flex: none; }
+  .bc-scroll { flex: 1 1 0; min-width: 0; overflow-x: auto; overflow-y: hidden; }
+  .bc-plot { position: relative; display: flex; align-items: flex-end;
+    justify-content: space-between; height: 150px; border-bottom: 1px solid var(--border);
+    background: repeating-linear-gradient(to top, transparent 0, transparent calc(25% - 1px), var(--border) calc(25% - 1px), var(--border) 25%); }
+  .bc-bar { flex: 0 0 auto; min-height: 1px; background: var(--accent); opacity: .8; border-radius: 1px 1px 0 0; }
+  .bc-bar:hover { opacity: 1; }
+  .bc-line { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .bc-line polyline { fill: none; stroke: var(--purple); stroke-width: 1.4; opacity: .5;
+    vector-effect: non-scaling-stroke; }
+  .bc-xax { display: flex; justify-content: space-between; margin-top: 3px;
+    font: 9.5px/1 var(--mono); color: var(--dim); }
+  .bc-xax span { flex: 0 0 auto; white-space: nowrap; text-align: center; overflow: visible; }
+  .ct-ctrls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 4px; }
+  .ct-ctrls .seg button { padding: 3px 9px; font-size: 11px; }
+  select.facet { margin-left: 8px; font-size: 12px; padding: 3px 6px; max-width: 160px; }
+  .cmdlink { cursor: pointer; border-bottom: 1px dotted currentColor; }
+  .cmdlink:hover { color: var(--fg); }
+
+  /* economy */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin: 4px 0 18px; }
+  .ecard { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .ecard .big { font-size: 22px; font-weight: 650; font-family: var(--mono); }
+  .ecard .cap { font-size: 12px; color: var(--fg); margin-top: 2px; }
+  .ecard .hint { font-size: 11px; color: var(--dim); margin-top: 5px; line-height: 1.4; }
+  .ecard.warn { border-left: 3px solid var(--yellow); }
+  .esec { margin-top: 22px; }
+  .esec > .blurb { font-size: 12px; color: var(--dim); margin: 0 0 8px; max-width: 780px; }
+  .esec h3 { font-size: 13px; margin: 0 0 3px; }
+
+  #tip { position: fixed; z-index: 40; max-width: 620px; max-height: 60vh; overflow: auto;
+    background: #0b0f16; border: 1px solid var(--border); border-radius: 7px; padding: 9px 11px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.55); font: 11px/1.5 var(--mono); pointer-events: none; }
+  #tip .th { color: var(--dim); text-transform: uppercase; letter-spacing: .5px; font-size: 9.5px; margin-bottom: 5px; }
+  #tip .tc { display: flex; gap: 8px; padding: 2px 0; border-top: 1px solid #1a212c; }
+  #tip .tc:first-of-type { border-top: 0; }
+  #tip .tc .t { color: var(--dim); flex: none; }
+  #tip .tc .c { color: var(--green); word-break: break-all; }
+  #tip .tc .d { color: var(--purple); flex: none; margin-left: auto; }
+  #tip .um { color: var(--accent); white-space: pre-wrap; margin: 2px 0 6px; }
+  .promptmini, .card .tok.hoverable { cursor: help; }
+</style>
+</head>
+<body>
+<header>
+  <h1><a href="https://github.com/kwpoore-lab/codexmon" target="_blank" rel="noopener">codexmon</a></h1>
+  <nav id="tabs">
+    <a href="#running" data-tab="running" class="on">Prompts running now</a>
+    <a href="#history" data-tab="history">History</a>
+    <a href="#trends" data-tab="trends">Trends</a>
+    <a href="#economy" data-tab="economy">Economy</a>
+  </nav>
+  <span id="conn"></span>
+  <span class="stat" id="hdrstat">connecting…</span>
+</header>
+<main>
+  <section id="tab-running">
+    <div id="usageSummary" class="tgrand" hidden></div>
+    <h2>Prompts running now
+      <span style="float:right;font-weight:400;text-transform:none;letter-spacing:0">
+        <button id="livePause" type="button" title="Pause live updates so you can scroll — nothing is lost, updates just queue">⏸ Pause</button>
+        sort
+        <span class="seg" id="runSort">
+          <button data-s="started" class="on">Started</button><button data-s="tokens">Tokens</button>
+        </span>
+      </span>
+    </h2>
+    <div id="running"><div class="empty">Waiting for activity…</div></div>
+    <h2>Other live sessions</h2>
+    <div id="live"></div>
+  </section>
+
+  <section id="tab-history" hidden>
+    <h2>History
+      <span style="float:right;font-weight:400;text-transform:none;letter-spacing:0">
+        <span class="seg" id="histSeg">
+          <button data-p="hour">Hour</button><button data-p="day" class="on">Day</button><button data-p="week">Week</button><button data-p="month">Month</button>
+        </span>
+        <select id="periodSel" style="margin-left:10px"></select>
+        <select id="histModel" class="facet" title="model"></select>
+        <select id="histEffort" class="facet" title="effort"></select>
+        <label style="margin-left:12px;font-size:12px;color:var(--dim)">
+          <input type="checkbox" id="histSub" checked> subagents</label>
+      </span>
+    </h2>
+    <div id="hist"><div class="empty">Loading…</div></div>
+  </section>
+
+  <section id="tab-trends" hidden>
+    <h2>Trends
+      <span style="float:right;font-weight:400;text-transform:none;letter-spacing:0">
+        <span class="seg" id="periodSeg">
+          <button data-p="hour">Hour</button><button data-p="day" class="on">Day</button><button data-p="week">Week</button><button data-p="month">Month</button>
+        </span>
+        <select id="trModel" class="facet" title="model"></select>
+        <select id="trEffort" class="facet" title="effort"></select>
+        <label style="margin-left:12px;font-size:12px;color:var(--dim)">
+          <input type="checkbox" id="subToggle"> include subagents</label>
+      </span>
+    </h2>
+    <div id="trends"><div class="empty">Loading…</div></div>
+  </section>
+
+  <section id="tab-economy" hidden>
+    <h2>Economy — where the tokens go
+      <span style="float:right;font-weight:400;text-transform:none;letter-spacing:0">
+        <span class="seg" id="ecoRange">
+          <button data-r="all" class="on">All time</button><button data-r="30d">30 days</button><button data-r="7d">7 days</button>
+        </span>
+        <select id="ecoModel" class="facet" title="model"></select>
+        <select id="ecoEffort" class="facet" title="effort"></select>
+        <label style="margin-left:12px;font-size:12px;color:var(--dim)">
+          <input type="checkbox" id="ecoSub" checked> include subagents</label>
+      </span>
+    </h2>
+    <div id="economy"><div class="empty">Loading…</div></div>
+  </section>
+</main>
+
+<div id="overlay"><div id="detail"><span class="close" onclick="closeDetail()">×</span><div id="detailBody"></div></div></div>
+<div id="tip" hidden></div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const fmt = (n) => (n == null || isNaN(n)) ? '–' : Math.round(n).toLocaleString();
+const short = (s, n = 120) => !s ? '' : (s.length > n ? s.slice(0, n) + '…' : s);
+function ago(ms) {
+  if (ms == null) return '';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return s + 's ago';
+  const m = Math.round(s / 60);
+  if (m < 60) return m + 'm ago';
+  return Math.round(m / 60) + 'h ago';
+}
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+// use inside a double-quoted HTML attribute
+function attr(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+// rollout timestamps are UTC ISO strings — render them in the viewer's local time
+const hhmmss = (ts) => {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return isNaN(d) ? String(ts).slice(11, 19)
+    : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+};
+const dateHM = (ts) => {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d)) return String(ts);
+  return d.toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+};
+const localDateTime = (ts) => {
+  if (!ts) return '–';
+  const d = new Date(ts);
+  return isNaN(d) ? String(ts) : d.toLocaleString([], { hour12: false });
+};
+
+let lastSnap = null;
+
+// ---------------------------------------------------------------------------
+// SSE
+// ---------------------------------------------------------------------------
+// Pausing only holds off re-rendering the live panel so scroll position isn't
+// disturbed — the server keeps every command regardless, so unpausing just
+// renders the freshest snapshot already received; nothing is missed.
+let livePaused = false;
+let pendingSnap = null;
+
+function connect() {
+  const es = new EventSource('/events');
+  es.onopen = () => $('#conn').classList.add('ok');
+  es.onerror = () => { $('#conn').classList.remove('ok'); $('#hdrstat').textContent = 'reconnecting…'; };
+  es.onmessage = (e) => {
+    try {
+      const snap = JSON.parse(e.data);
+      if (livePaused) { pendingSnap = snap; return; }
+      render(snap);
+    } catch (_) {}
+  };
+}
+
+$('#livePause').addEventListener('click', () => {
+  livePaused = !livePaused;
+  $('#livePause').classList.toggle('on', livePaused);
+  $('#livePause').textContent = livePaused ? '▶ Resume' : '⏸ Pause';
+  if (!livePaused && pendingSnap) { render(pendingSnap); pendingSnap = null; }
+});
+
+function render(snap) {
+  lastSnap = snap;
+  $('#conn').classList.add('ok');
+  const threads = snap.threads || [];
+  const running = threads.filter(t => t.status === 'running');
+  const wk = snap.rateLimits && snap.rateLimits.primary
+    ? ` · ${snap.rateLimits.primary.used_percent.toFixed(0)}% ${winShort(snap.rateLimits.primary.window_minutes)}` : '';
+  $('#hdrstat').textContent =
+    `${threads.length} live · ${running.length} running · updated ${new Date(snap.now).toLocaleTimeString()}${wk}`;
+
+  renderUsage(snap);
+  renderLiveTree(threads);
+}
+
+function winShort(mins) {
+  if (mins >= 10080) return 'wk';
+  if (mins >= 1440) return Math.round(mins / 1440) + 'd';
+  return Math.round(mins / 60) + 'h';
+}
+function winLabel(mins) {
+  if (mins >= 10080) return `${Math.round(mins / 10080)}-week`;
+  if (mins >= 1440) return `${Math.round(mins / 1440)}-day`;
+  return `${Math.round(mins / 60)}-hour`;
+}
+function untilReset(unixSec) {
+  const ms = unixSec * 1000 - Date.now();
+  if (ms <= 0) return 'now';
+  const h = ms / 3600000;
+  if (h >= 48) return Math.round(h / 24) + 'd';
+  if (h >= 1) return Math.floor(h) + 'h ' + Math.round((h % 1) * 60) + 'm';
+  return Math.round(ms / 60000) + 'm';
+}
+
+function renderUsage(snap) {
+  const el = $('#usageSummary');
+  const rl = snap.rateLimits, u = snap.usage || {};
+  const parts = [];
+  const windowStat = (w, name) => {
+    if (!w) return;
+    const rem = (100 - w.used_percent).toFixed(w.used_percent > 99 ? 1 : 0);
+    parts.push(`<span title="${name} limit window"><b>${w.used_percent.toFixed(w.used_percent < 10 ? 1 : 0)}%</b> used · <b>${rem}%</b> left of ${winLabel(w.window_minutes)} limit${w.resets_at ? ` · resets in ${untilReset(w.resets_at)}` : ''}</span>`);
+  };
+  if (rl) { windowStat(rl.primary, 'primary'); windowStat(rl.secondary, 'secondary'); }
+  if (u.haveRollups) {
+    parts.push(`<span><b>${kfmtN(u.today)}</b> tokens today</span>`);
+    parts.push(`<span><b>${kfmtN(u.week)}</b> this week</span>`);
+  }
+  const liveTok = (snap.threads || []).reduce((a, t) => a + (t.cumReqTokens || 0), 0);
+  if (snap.threads && snap.threads.length)
+    parts.push(`<span><b>${kfmtN(liveTok)}</b> across ${snap.threads.length} live</span>`);
+  if (rl && rl.plan_type) parts.push(`<span style="margin-left:auto">plan: ${esc(rl.plan_type)}${rl.credits && rl.credits.balance && rl.credits.balance !== '0' ? ` · $${esc(rl.credits.balance)} credit` : ''}</span>`);
+
+  el.innerHTML = parts.join('');
+  el.hidden = !parts.length;
+}
+
+// ---------------------------------------------------------------------------
+// Live tree — one hierarchy spanning "prompts running now" + "other live"
+// ---------------------------------------------------------------------------
+let runSort = 'started';   // 'started' | 'tokens', both descending
+let lastRunOrder = [];     // root ids in the order last rendered
+
+function runCmp(a, b) {
+  if (runSort === 'tokens') return (b.cumReqTokens || 0) - (a.cumReqTokens || 0);
+  return (b.startedAt || '').localeCompare(a.startedAt || '') || (b.mtime - a.mtime);
+}
+
+function renderLiveTree(threads) {
+  // the same thread id can show up more than once (resumed sessions write a
+  // new rollout file but keep the original id) — keep the freshest copy
+  const nodes = new Map();
+  for (const t of threads) {
+    const prev = nodes.get(t.id);
+    if (!prev || (t.mtime || 0) >= (prev.mtime || 0)) nodes.set(t.id, t);
+  }
+
+  // subagents whose parent isn't in the live window: rebuild the missing
+  // ancestors from `lineage` so a guardian is never shown as a top-level root
+  for (const t of threads) {
+    if (!t.parentId || nodes.has(t.parentId) || !t.lineage || !t.lineage.length) continue;
+    let prevId = null;
+    for (const l of t.lineage) {
+      if (!nodes.has(l.id)) {
+        nodes.set(l.id, {
+          id: l.id, title: l.title || null, project: l.project || null,
+          agentKind: (l.kind && l.kind !== 'main') ? l.kind : null,
+          isSubagent: !!(l.kind && l.kind !== 'main'),
+          synthetic: true, status: 'stale', taskActive: false,
+          mtime: t.mtime, startedAt: t.startedAt, parentId: prevId, lineage: [],
+        });
+      }
+      prevId = l.id;
+    }
+  }
+
+  const kids = new Map();
+  const roots = [];
+  for (const t of nodes.values()) {
+    const pid = t.parentId && nodes.has(t.parentId) ? t.parentId : null;
+    if (pid) (kids.get(pid) || kids.set(pid, []).get(pid)).push(t);
+    else roots.push(t);
+  }
+
+  const active = (t) => t.status === 'running' || t.taskActive;
+  const subtreeActive = (t, seen = new Set()) => {
+    if (seen.has(t.id)) return false; seen.add(t.id);
+    return active(t) || (kids.get(t.id) || []).some(c => subtreeActive(c, seen));
+  };
+
+  // featured roots = those whose subtree has an active agent; fall back to the
+  // single most-recent real root so the panel is never empty
+  let featured = roots.filter(r => subtreeActive(r));
+  if (!featured.length) {
+    const real = roots.filter(r => !r.synthetic).sort((a, b) => b.mtime - a.mtime);
+    if (real.length) featured = [real[0]];
+  }
+  const featuredSet = new Set(featured.map(r => r.id));
+  const other = roots.filter(r => !featuredSet.has(r.id));
+
+  // sibling order; hold steady while a panel is expanded
+  const pos = new Map(lastRunOrder.map((id, i) => [id, i]));
+  const frozen = expanded.size && lastRunOrder.length;
+  const cmp = (a, b) => {
+    if (frozen) {
+      const ai = pos.has(a.id) ? pos.get(a.id) : Infinity;
+      const bi = pos.has(b.id) ? pos.get(b.id) : Infinity;
+      if (ai !== bi) return ai - bi;
+    }
+    return runCmp(a, b);
+  };
+  featured.sort(cmp);          // cmp = runCmp, but frozen while a panel is expanded
+  other.sort(cmp);
+  for (const arr of kids.values()) arr.sort(cmp);
+
+  lastRunOrder = featured.map(r => r.id);
+
+  const seen = new Set();
+  const node = (t, d) => {
+    if (seen.has(t.id)) return ''; seen.add(t.id);
+    let self;
+    if (t.synthetic) self = wrap(syntheticRow(t), d);
+    else if (d === 0) self = `<div class="focus-wrap" data-root="${t.id}">${focusBlock(t, 0)}</div>`;
+    else self = wrap(`<div class="focus-wrap" data-root="${t.id}">${focusBlock(t, d)}</div>`, d);
+    const children = (kids.get(t.id) || []).map(c => node(c, d + 1)).join('');
+    return self + children;
+  };
+  const wrap = (inner, d) =>
+    `<div class="card-wrap"${d ? ` style="margin-left:${d * 24}px"` : ''}>${d ? '<span class="tree-tick"></span>' : ''}${inner}</div>`;
+
+  $('#running').innerHTML = featured.length
+    ? featured.map(r => node(r, 0)).join('')
+    : '<div class="empty">No session is currently running.</div>';
+  const otherHtml = other.map(r => node(r, 0)).join('');
+  $('#live').innerHTML = otherHtml || '<div class="empty">Nothing else active in the last 15 minutes.</div>';
+}
+
+function syntheticRow(t) {
+  return `<div class="card stale synthetic" onclick="openDetail('${t.id}')">
+    <div class="row"><span class="dot stale"></span>
+      <span class="title">${esc(t.title || t.id.slice(0, 8))}</span>
+      ${t.agentKind ? `<span class="badge agent">${esc(t.agentKind)}</span>` : ''}
+      <span class="badge">not in live window</span></div>
+    <div class="meta">${esc(t.project || '')} · parent of the agents below — open →</div>
+  </div>`;
+}
+
+function lineageCrumb(l) {
+  return `<a href="#" onclick="openDetail('${l.id}');event.stopPropagation();return false"
+    title="${attr(l.title || l.id)}">${esc(l.title ? short(l.title, 46) : l.id.slice(0, 8))}</a>`;
+}
+function lineageLine(t) {
+  if (!t.lineage || !t.lineage.length) return '';
+  const kind = t.agentKind || (t.isSubagent ? 'subagent' : '');
+  const crumbs = t.lineage.map(lineageCrumb).join(' <span class="sep">›</span> ');
+  return `<div class="lineage">${kind ? `<span class="badge agent">${esc(kind)}</span> ` : ''}spawned by ${crumbs} <span class="sep">›</span> <b>this</b></div>`;
+}
+
+function focusBlock(t, depth) {
+  const nested = depth > 0;
+  const name = t.title || (t.agentNickname ? 'agent ' + t.agentNickname
+    : t.agentKind ? t.agentKind : t.id.slice(0, 8));
+  const badges = [];
+  if (t.primaryModel) badges.push(`<span class="badge model">${esc(t.primaryModel)}</span>`);
+  if (t.effort) badges.push(`<span class="badge">effort:${esc(t.effort)}</span>`);
+  if (t.serviceTier) badges.push(`<span class="badge tier">${esc(t.serviceTier)}</span>`);
+  if (t.autoReview) badges.push(`<span class="badge review">auto-review</span>`);
+  if (t.agentNickname) badges.push(`<span class="badge agent">↳ ${esc(t.agentNickname)} d${t.depth}</span>`);
+  if (t.originator) badges.push(`<span class="badge">${esc(t.originator)}</span>`);
+
+  const tk = t.tokens || {};
+  const ctxPct = t.contextUsed != null ? t.contextUsed : null;
+  const proj = t.git ? `${esc(t.git.repo || t.project)} @ ${esc(t.git.branch)}` : esc(t.project || '');
+  const open = expanded.has(t.id);
+
+  const prompt = t.firstUserText
+    ? `<div class="prompt"><span class="lbl">session prompt</span><p>${esc(t.firstUserText)}</p></div>` : '';
+  const latest = (t.lastUserText && t.lastUserText !== t.firstUserText)
+    ? `<div class="prompt"><span class="lbl">latest message</span><p>${esc(t.lastUserText)}</p></div>` : '';
+
+  const cmds = (t.commands || []).slice().reverse();      // latest first
+  const stats = t.commandStats || [];
+  const promptLine = t.lastUserText || t.firstUserText || '';
+
+  return `
+    <div class="focus ${open ? 'expanded' : ''} ${nested ? 'nested' : ''}" data-id="${t.id}">
+      <div class="fhead" onclick="toggleExp('${t.id}')">
+        <span class="caret">▸</span>
+        <span class="dot ${t.status}"></span>
+        ${nested && (t.agentKind || t.agentNickname) ? `<span class="badge agent">${esc(t.agentKind || t.agentNickname)}</span>` : ''}
+        <span class="ftitle">${esc(name)}</span>
+        <span class="badge">${ago(t.ageMs)}</span>
+        ${t.taskActive ? '<span class="badge" style="color:var(--green)">● active turn</span>' : ''}
+        <span class="fhead-tok">${kfmtN(t.cumReqTokens || tk.total_tokens)} tok${ctxPct != null ? ` · ${ctxPct}% ctx` : ''} · ${t.toolCallCount} cmds · ${t.turnsCompleted}/${t.turnsStarted} turns${t.compactions ? ` · ${t.compactions}⤺` : ''}</span>
+        <a href="#" onclick="openDetail('${t.id}');event.stopPropagation();return false" class="tl-link">full timeline →</a>
+      </div>
+      <div class="fmeta">${proj}${t.primaryModel ? ' · ' + esc(t.primaryModel) : ''}${t.effort ? ' · effort:' + esc(t.effort) : ''}${t.serviceTier ? ' · ' + esc(t.serviceTier) : ''}</div>
+      ${nested ? '' : lineageLine(t)}
+      <div class="promptmini" data-tip-id="${t.id}">${esc(promptLine)}</div>
+      <div class="chartwrap">${consumptionChart(t.tokenSeries, open ? 230 : (nested ? 92 : 140))}</div>
+
+      <div class="fdetail">
+        <div class="fpath">${esc(t.cwd || '')}</div>
+        <div class="row" style="margin:6px 0">${badges.join(' ')}</div>
+        ${prompt}${latest}
+        <div class="statline">
+          <span><b>${fmt(t.cumReqTokens)}</b> billed tokens (Σ per request)</span>
+          ${t.compactions ? `<span title="context compacted — the raw counter reset">${t.compactions}× compacted</span>` : ''}
+          <span><b>${fmt(t.contextWindow)}</b> ctx window${ctxPct != null ? ` · ${ctxPct}% full` : ''}</span>
+          <span>in <b>${fmt(tk.input_tokens)}</b></span>
+          <span>cached <b>${fmt(tk.cached_input_tokens)}</b></span>
+          <span>out <b>${fmt(tk.output_tokens)}</b></span>
+          <span>reasoning <b>${fmt(tk.reasoning_output_tokens)}</b></span>
+        </div>
+        <div class="cols">
+          <div>
+            <p class="subh">Commands — latest first</p>
+            <div class="cmdscroll"><table><thead><tr>
+              <th>Time</th><th>Command</th>
+              <th class="num" title="billed tokens consumed by this command">Tokens</th>
+              <th class="num" title="running sum of the Tokens column through this command, reset at the start of each prompt">Command total</th></tr></thead>
+              <tbody>${cmds.length ? cmds.map(c => `<tr>
+                <td class="num">${hhmmss(c.ts)}</td>
+                <td class="cmd" title="${attr(c.cmd)}">${esc(short(c.cmd, 140))}</td>
+                <td class="num">${c.delta ? fmt(c.delta) : '·'}</td>
+                <td class="num">${fmt(c.runSum)}</td></tr>`).join('')
+                : '<tr><td colspan="4" class="empty">No commands yet.</td></tr>'}
+              </tbody></table></div>
+          </div>
+          <div>
+            <p class="subh">Consumption by base command (params ignored)</p>
+            <table><thead><tr>
+              <th>Base</th><th class="num">Runs</th><th class="num">Δ tokens</th><th class="num">Last</th></tr></thead>
+              <tbody>${stats.length ? stats.map(g => `<tr>
+                <td class="base"><span class="cmdlink" data-cmd="${esc(g.base)}">${esc(g.base)}</span></td>
+                <td class="num">${g.count}</td>
+                <td class="num">${fmt(g.tokens)}</td>
+                <td class="num">${hhmmss(g.lastTs)}</td></tr>`).join('')
+                : '<tr><td colspan="4" class="empty">–</td></tr>'}
+              </tbody></table>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+const expanded = new Set();
+function toggleExp(id) {
+  const box = document.querySelector('.focus[data-id="' + id + '"]');
+  if (!box) return;
+  if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
+  if (lastSnap) render(lastSnap);
+}
+function kfmtN(v) {
+  if (v == null || isNaN(v)) return '–';
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(0) + 'k';
+  return Math.round(v);
+}
+
+// ---------------------------------------------------------------------------
+// consumption chart
+//  line/area = our own running sum of per-request tokens (monotonic — the raw
+//  Codex counter resets on context compaction, so we don't trust it here)
+//  bars      = per-turn tokens
+//  dashed markers = context compactions (raw counter reset points)
+// ---------------------------------------------------------------------------
+function consumptionChart(series, H) {
+  H = H || 230;
+  if (!series || series.length < 2)
+    return `<svg class="chart" viewBox="0 0 800 ${H}" style="height:${H}px"><text x="12" y="24">Not enough data yet…</text></svg>`;
+  const W = 800, PL = 58, PR = 12, PT = 12, PB = 22;
+  const iw = W - PL - PR, ih = H - PT - PB;
+  const times = series.map(p => Date.parse(p.t) || 0);
+  const t0 = times[0], t1 = times[times.length - 1] || t0 + 1;
+  const span = (t1 - t0) || 1;
+  const x = (t) => PL + ((t - t0) / span) * iw;
+
+  // running billed total: prefer server-computed `cum`, else accumulate `last`
+  let acc = 0;
+  const cum = series.map(p => (p.cum != null ? p.cum : (acc += (p.last || 0))));
+  // pad the y-domain so the line doesn't pin the top/bottom edges of the box —
+  // without this it always touches both corners (first point = bottom-left,
+  // last point = top-right) regardless of the actual shape of the data
+  const minC = Math.min(...cum), maxC = Math.max(...cum);
+  const rawRange = (maxC - minC) || 1;
+  const pad = rawRange * 0.12;
+  const base = minC - pad, cMax = rawRange + pad * 2;
+  const yC = (v) => PT + ih - ((v - base) / cMax) * ih;
+  const lastMax = Math.max(...series.map(p => p.last || 0)) || 1;
+
+  let d = `M ${x(times[0]).toFixed(1)} ${yC(cum[0]).toFixed(1)}`;
+  cum.forEach((v, i) => { d += ` L ${x(times[i]).toFixed(1)} ${yC(v).toFixed(1)}`; });
+  const area = d + ` L ${x(times[times.length - 1]).toFixed(1)} ${(PT + ih).toFixed(1)} L ${x(times[0]).toFixed(1)} ${(PT + ih).toFixed(1)} Z`;
+
+  const bw = Math.max(1, iw / series.length * 0.6);
+  const bars = series.map((p, i) => {
+    if (!p.last) return '';
+    const bh = (p.last / lastMax) * ih * 0.55;
+    return `<rect x="${(x(times[i]) - bw / 2).toFixed(1)}" y="${(PT + ih - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="var(--purple)" opacity="0.2"/>`;
+  }).join('');
+
+  const marks = series.map((p, i) => p.reset
+    ? `<line x1="${x(times[i]).toFixed(1)}" y1="${PT}" x2="${x(times[i]).toFixed(1)}" y2="${PT + ih}" stroke="var(--yellow)" stroke-width="1" stroke-dasharray="3 2"/>
+       <text x="${x(times[i]).toFixed(1)}" y="${PT + 9}" text-anchor="middle" fill="var(--yellow)">compacted</text>` : '').join('');
+
+  let grid = '';
+  for (let g = 0; g <= 4; g++) {
+    const v = base + cMax * g / 4, yy = yC(v);
+    grid += `<line x1="${PL}" y1="${yy.toFixed(1)}" x2="${W - PR}" y2="${yy.toFixed(1)}" stroke="var(--border)" stroke-width="1"/>`;
+    grid += `<text x="${PL - 6}" y="${(yy + 3).toFixed(1)}" text-anchor="end">${kfmt(v)}</text>`;
+  }
+  const tlabel = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" style="height:${H}px" preserveAspectRatio="none">
+    ${grid}${bars}${marks}
+    <path d="${area}" fill="var(--accent)" opacity="0.08"/>
+    <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.3" stroke-linejoin="round"/>
+    <text x="${PL}" y="${H - 6}">${tlabel(t0)}</text>
+    <text x="${W - PR}" y="${H - 6}" text-anchor="end">${tlabel(t1)}</text>
+    <text x="${PL + iw / 2}" y="${H - 6}" text-anchor="middle">billed tokens, cumulative (line) · per-turn tokens (bars)</text>
+  </svg>`;
+}
+function kfmt(v) {
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(0) + 'k';
+  return Math.round(v);
+}
+
+// ---------------------------------------------------------------------------
+// history
+// ---------------------------------------------------------------------------
+let histAll = [];              // all sessions from /api/history
+let histPeriod = 'day';
+let histSub = true;
+let histModel = '', histEffort = '';
+let histAnchor = null;         // selected bucket key
+let histPoll = null;
+
+// sessions passing the current subagent / model / effort filters
+function histFiltered() {
+  return histAll.filter(s =>
+    (histSub || !s.isSubagent)
+    && (!histModel || s.model === histModel || (histModel === 'codex-auto-review' && s.autoReview))
+    && (!histEffort || s.effort === histEffort));
+}
+let histSort = { col: 'tokens', dir: 'desc' };
+const HIST_COLS = [
+  { key: 'started', label: 'Started', num: true, get: t => t.startedAt || '' },
+  { key: 'thread', label: 'Thread', get: t => (t.title || t.agentNickname || t.id).toLowerCase() },
+  { key: 'prompt', label: 'Prompt', get: t => (t.prompt || '').toLowerCase() },
+  { key: 'project', label: 'Project', get: t => (t.project || '').toLowerCase() },
+  { key: 'model', label: 'Model', get: t => (t.model || '').toLowerCase() },
+  { key: 'kind', label: 'Kind', get: t => (t.isSubagent ? 'subagent' : 'main') },
+  { key: 'tokens', label: 'Tokens', num: true, get: t => t.tokens || 0 },
+  { key: 'cmds', label: 'Cmds', num: true, get: t => t.toolCalls || 0 },
+];
+
+function histBucketKey(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '?';
+  const p2 = n => String(n).padStart(2, '0');
+  if (histPeriod === 'month') return `${d.getFullYear()}-${p2(d.getMonth() + 1)}`;
+  if (histPeriod === 'week') {
+    const t = new Date(d); t.setHours(0, 0, 0, 0);
+    t.setDate(t.getDate() - ((t.getDay() + 6) % 7));
+    return `${t.getFullYear()}-${p2(t.getMonth() + 1)}-${p2(t.getDate())}`;
+  }
+  const ymd = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+  if (histPeriod === 'hour') {
+    const q = Math.floor(d.getMinutes() / 15) * 15;
+    return `${ymd}T${p2(d.getHours())}:${p2(q)}`;
+  }
+  return ymd;
+}
+function histBucketLabel(k) {
+  if (histPeriod === 'month') {
+    const [y, m] = k.split('-');
+    return new Date(y, m - 1, 1).toLocaleDateString([], { year: 'numeric', month: 'long' });
+  }
+  if (histPeriod === 'week') return 'Week of ' + new Date(k + 'T00:00').toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+  if (histPeriod === 'hour') return new Date(k).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  return new Date(k + 'T00:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+async function loadHistory() {
+  const r = await fetch('/api/history').then(x => x.json());
+  if (r.building) {
+    const p = r.progress || {};
+    $('#hist').innerHTML = `<div class="empty">Building rollup cache… ${p.done || 0} / ${p.total || '?'} sessions</div>`;
+    clearTimeout(histPoll); histPoll = setTimeout(loadHistory, 1500);
+    return;
+  }
+  histAll = r.sessions || [];
+  fillFacet($('#histModel'), r.facets && r.facets.models, histModel, 'all models');
+  fillFacet($('#histEffort'), r.facets && r.facets.efforts, histEffort, 'all efforts');
+  rebuildPeriodSelect();
+  renderHistory();
+}
+
+function rebuildPeriodSelect() {
+  let src = histFiltered();
+  if (histPeriod === 'hour') {   // hour view = last 24h only
+    const cutoff = Date.now() - 24 * 3600 * 1000;
+    src = src.filter(s => new Date(s.startedAt).getTime() >= cutoff);
+  }
+  const keys = [...new Set(src.map(s => histBucketKey(s.startedAt)))].sort().reverse();
+  if (!histAnchor || !keys.includes(histAnchor)) histAnchor = keys[0];
+  const sel = $('#periodSel');
+  sel.innerHTML = keys.map(k => `<option value="${k}" ${k === histAnchor ? 'selected' : ''}>${esc(histBucketLabel(k))}</option>`).join('');
+}
+
+function sortHistory(col) {
+  if (histSort.col === col) histSort.dir = histSort.dir === 'asc' ? 'desc' : 'asc';
+  else histSort = { col, dir: HIST_COLS.find(c => c.key === col).num ? 'desc' : 'asc' };
+  renderHistory();
+}
+
+function renderHistory() {
+  if (!histAll.length) { $('#hist').innerHTML = '<div class="empty">No sessions.</div>'; return; }
+  const rows0 = histFiltered().filter(s => histBucketKey(s.startedAt) === histAnchor);
+  const c = HIST_COLS.find(x => x.key === histSort.col);
+  const dir = histSort.dir === 'asc' ? 1 : -1;
+  const rows = rows0.slice().sort((a, b) => {
+    const va = c.get(a), vb = c.get(b);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * dir;
+  });
+  const sum = rows0.reduce((a, r) => {
+    a.tok += r.tokens || 0; a.cmds += r.toolCalls || 0;
+    a.main += r.isSubagent ? 0 : 1; a.sub += r.isSubagent ? 1 : 0;
+    return a;
+  }, { tok: 0, cmds: 0, main: 0, sub: 0 });
+
+  const th = HIST_COLS.map(col =>
+    `<th class="sortable ${col.num ? 'num' : ''} ${histSort.col === col.key ? histSort.dir : ''}"
+       onclick="sortHistory('${col.key}')">${col.label}</th>`).join('');
+  $('#hist').innerHTML = `
+    <div class="tgrand">
+      <span><b>${fmt(sum.tok)}</b> billed tokens</span>
+      <span><b>${sum.main}</b> sessions${sum.sub ? ` · ${sum.sub} subagents` : ''}</span>
+      <span><b>${fmt(sum.cmds)}</b> commands</span>
+      <span style="margin-left:auto">${esc(histBucketLabel(histAnchor))}</span>
+    </div>
+    <table><thead><tr>${th}</tr></thead><tbody>
+    ${rows.map(t => {
+      const name = t.title || (t.agentNickname ? 'agent ' + t.agentNickname : t.id.slice(0, 8));
+      const kd = t.isSubagent ? (t.agentKind || 'subagent') : 'main';
+      const kind = kd + (t.agentNickname ? ' · ' + esc(t.agentNickname) : '');
+      const models = [t.model, t.effort ? 'effort:' + t.effort : null, t.autoReview ? '+review' : null].filter(Boolean).join(' ');
+      const par = t.parent && (t.parent.title || t.parent.id);
+      return `<tr onclick="openDetail('${t.id}')" style="cursor:pointer">
+        <td class="num">${dateHM(t.startedAt)}</td>
+        <td>${esc(name)}${par ? `<div class="lineage" style="padding:0" onclick="openDetail('${t.parent.id}');event.stopPropagation()">↳ ${esc(short(t.parent.title || t.parent.id, 40))}</div>` : ''}</td>
+        <td style="max-width:280px;color:var(--dim)">${esc(short(t.prompt, 100))}</td>
+        <td>${esc(t.repo || t.project || '')}${t.branch ? ' @ ' + esc(t.branch) : ''}</td>
+        <td>${esc(models || '–')}</td>
+        <td>${kind}</td>
+        <td class="num">${fmt(t.tokens)}${t.compactions ? ' ⤺' : ''}</td>
+        <td class="num">${t.toolCalls}</td>
+      </tr>`;
+    }).join('')}
+  </tbody></table>`;
+}
+
+$('#histSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  [...$('#histSeg').children].forEach(x => x.classList.toggle('on', x === b));
+  histPeriod = b.dataset.p; histAnchor = null;
+  rebuildPeriodSelect(); renderHistory();
+});
+$('#periodSel').addEventListener('change', (e) => { histAnchor = e.target.value; renderHistory(); });
+$('#histSub').addEventListener('change', (e) => { histSub = e.target.checked; rebuildPeriodSelect(); renderHistory(); });
+$('#histModel').addEventListener('change', (e) => { histModel = e.target.value; rebuildPeriodSelect(); renderHistory(); });
+$('#histEffort').addEventListener('change', (e) => { histEffort = e.target.value; rebuildPeriodSelect(); renderHistory(); });
+
+$('#runSort').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  [...$('#runSort').children].forEach(x => x.classList.toggle('on', x === b));
+  runSort = b.dataset.s;
+  lastRunOrder = [];   // explicit sort request — re-sort now even if a panel is open
+  if (lastSnap) render(lastSnap);
+});
+
+// ---------------------------------------------------------------------------
+// detail overlay
+// ---------------------------------------------------------------------------
+async function openDetail(id) {
+  $('#overlay').classList.add('on');
+  $('#detailBody').innerHTML = '<div class="empty">Loading…</div>';
+  const r = await fetch('/api/session/' + encodeURIComponent(id)).then(x => x.json());
+  if (r.error) { $('#detailBody').innerHTML = '<div class="empty">' + r.error + '</div>'; return; }
+  const s = r.summary, tk = s.tokens || {};
+  const name = s.title || (s.agentNickname ? 'agent ' + s.agentNickname : s.id.slice(0, 8));
+  const stats = s.commandStats || [];
+  $('#detailBody').innerHTML = `
+    <h3 style="margin:0 0 4px">${esc(name)}</h3>
+    <div class="fpath">${esc(s.id)}</div>
+    ${s.firstUserText ? `<div class="prompt"><span class="lbl">session prompt</span><p>${esc(s.firstUserText)}</p></div>` : ''}
+    <dl class="kv">
+      <dt>project</dt><dd>${esc(s.cwd || '–')}</dd>
+      <dt>git</dt><dd>${s.git ? esc((s.git.repo || '') + ' @ ' + s.git.branch + ' (' + s.git.commit + ')') : '–'}</dd>
+      <dt>model</dt><dd>${esc(s.primaryModel || '–')}${s.autoReview ? ' + auto-review' : ''}</dd>
+      <dt>effort / tier</dt><dd>${esc(s.effort || '–')} / ${esc(s.serviceTier || '–')}</dd>
+      <dt>client</dt><dd>${esc(s.originator || '–')} · ${esc(s.cliVersion || '')}</dd>
+      <dt>kind</dt><dd>${s.isSubagent ? (esc(s.agentKind || 'subagent') + (s.depth ? ' · depth ' + s.depth : '')) : 'main'}</dd>
+      ${s.lineage && s.lineage.length ? `<dt>lineage</dt><dd>${s.lineage.map(lineageCrumb).join(' › ')} › this</dd>` : ''}
+      <dt>started</dt><dd>${esc(localDateTime(s.startedAt))}</dd>
+      <dt>billed tokens</dt><dd>${fmt(s.cumReqTokens)} (Σ per request)${s.compactions ? ` · ${s.compactions}× compacted` : ''}</dd>
+      <dt>tokens</dt><dd>in ${fmt(tk.input_tokens)} · cached ${fmt(tk.cached_input_tokens)} · out ${fmt(tk.output_tokens)} · reason ${fmt(tk.reasoning_output_tokens)}</dd>
+      <dt>context window</dt><dd>${fmt(s.contextWindow)} · raw counter now ${fmt(tk.total_tokens)}</dd>
+      <dt>activity</dt><dd>${s.messageCount} msgs · ${s.toolCallCount} cmds · ${s.turnsCompleted}/${s.turnsStarted} turns</dd>
+    </dl>
+    <div class="chartwrap">${consumptionChart(s.tokenSeries)}</div>
+    ${stats.length ? `<p class="subh">Consumption by base command</p>
+      <table><thead><tr><th>Base</th><th class="num">Runs</th><th class="num">Δ tokens</th></tr></thead>
+      <tbody>${stats.map(g => `<tr><td class="base"><span class="cmdlink" data-cmd="${esc(g.base)}">${esc(g.base)}</span></td><td class="num">${g.count}</td><td class="num">${fmt(g.tokens)}</td></tr>`).join('')}</tbody></table>` : ''}
+    <h2 style="border:0">Timeline (${r.events.length}) — latest first</h2>
+    ${r.events.slice().reverse().map(evRow).join('')}`;
+}
+function evRow(e) {
+  const t = hhmmss(e.ts);
+  if (e.kind === 'message') return `<div class="ev ${e.role}"><div class="et">${t} · ${e.role}</div><pre>${esc(e.text)}</pre></div>`;
+  if (e.kind === 'tool') return `<div class="ev tool"><div class="et">${t} · tool ${esc(e.name)}</div><pre>${esc(e.input)}</pre></div>`;
+  if (e.kind === 'reasoning') return `<div class="ev reasoning"><div class="et">${t} · reasoning</div><pre>${esc(e.text)}</pre></div>`;
+  if (e.kind === 'tokens') return `<div class="ev"><div class="et">${t} · tokens → ${fmt(e.total)}</div></div>`;
+  return `<div class="ev"><div class="et">${t} · ${esc(e.kind)}</div></div>`;
+}
+// ---------------------------------------------------------------------------
+// hover: full command history for the current agent turn
+// ---------------------------------------------------------------------------
+function tipHtml(t) {
+  const all = t.commands || [];
+  const curTurn = t.currentTurn || (all.length ? Math.max(...all.map(c => c.turn || 0)) : 0);
+  const turnCmds = all.filter(c => (c.turn || 0) === curTurn);
+  const list = (turnCmds.length ? turnCmds : all.slice(-20));
+  const rows = list.map(c => `<div class="tc">
+      <span class="t">${hhmmss(c.ts)}</span>
+      <span class="c">${esc(c.cmd || c.name)}</span>
+      <span class="d">${c.delta ? '+' + kfmtN(c.delta) : ''}</span></div>`).join('');
+  return `<div class="th">current turn — ${esc(t.title || t.agentNickname || t.id.slice(0, 8))} · turn ${curTurn} · ${list.length} cmd${list.length === 1 ? '' : 's'}${turnCmds.length ? '' : ' (recent)'}</div>
+    ${t.lastUserText ? `<div class="um">▸ ${esc(t.lastUserText)}</div>` : ''}
+    ${rows || '<div class="tc"><span class="c">no commands yet</span></div>'}`;
+}
+function showTip(ev, id) {
+  const t = (lastSnap && lastSnap.threads || []).find(x => x.id === id);
+  if (!t) return;
+  const tip = $('#tip');
+  tip.innerHTML = tipHtml(t);
+  tip.hidden = false;
+  moveTip(ev);
+}
+function moveTip(ev) {
+  const tip = $('#tip');
+  if (tip.hidden) return;
+  const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + w > innerWidth - 8) x = ev.clientX - w - pad;
+  if (y + h > innerHeight - 8) y = Math.max(8, innerHeight - h - 8);
+  tip.style.left = x + 'px';
+  tip.style.top = y + 'px';
+}
+function hideTip() { $('#tip').hidden = true; }
+document.addEventListener('mouseover', (e) => {
+  const el = e.target.closest('[data-tip-id]');
+  if (el) showTip(e, el.dataset.tipId);
+});
+document.addEventListener('mousemove', (e) => {
+  if (!$('#tip').hidden && !e.target.closest('[data-tip-id]')) hideTip();
+  else if (!$('#tip').hidden) moveTip(e);
+});
+
+function closeDetail() { $('#overlay').classList.remove('on'); }
+$('#overlay').addEventListener('click', (e) => { if (e.target.id === 'overlay') closeDetail(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetail(); });
+
+// ---------------------------------------------------------------------------
+// trends
+// ---------------------------------------------------------------------------
+let trendPeriod = 'day';
+// "Hour" filter = last 24h, rendered as 15-minute bars
+const perLbl = (p) => p === 'hour' ? 'hour — last 24h, 15m bars' : p;
+const perLblN = (p) => p === 'hour' ? '15m bars (last 24h)' : p + 's';
+let trendSub = false;
+let trendData = null;
+let trendPoll = null;
+let trModel = '', trEffort = '';
+const tExpanded = { cmd: new Set(), prompt: new Set() };
+
+// populate a <select> with "All …" + options, preserving the current value
+function fillFacet(sel, values, cur, allLabel) {
+  if (!sel) return;
+  const want = cur || '';
+  sel.innerHTML = `<option value="">${allLabel}</option>` +
+    (values || []).map(v => `<option value="${attr(v)}"${v === want ? ' selected' : ''}>${esc(v)}</option>`).join('');
+  sel.value = want;
+}
+const facetQS = (m, e) => (m ? `&model=${encodeURIComponent(m)}` : '') + (e ? `&effort=${encodeURIComponent(e)}` : '');
+
+async function loadTrends() {
+  const el = $('#trends');
+  const r = await fetch(`/api/trends?period=${trendPeriod}${trendSub ? '&subagents=1' : ''}${facetQS(trModel, trEffort)}`).then(x => x.json());
+  if (r.building) {
+    const p = r.progress || {};
+    el.innerHTML = `<div class="empty">Building rollup cache… ${p.done || 0} / ${p.total || '?'} sessions<br>
+      <span style="font-size:11px">(one-time scan of ~/.codex/sessions; incremental after this)</span></div>`;
+    clearTimeout(trendPoll);
+    trendPoll = setTimeout(loadTrends, 1500);
+    return;
+  }
+  trendData = r;
+  fillFacet($('#trModel'), r.facets && r.facets.models, trModel, 'all models');
+  fillFacet($('#trEffort'), r.facets && r.facets.efforts, trEffort, 'all efforts');
+  renderTrends();
+}
+
+function tspark(per, buckets, keyOrFn) {
+  const f = typeof keyOrFn === 'function' ? keyOrFn : (o => (o && o[keyOrFn]) || 0);
+  const vals = buckets.map(b => f(per[b], b) || 0);
+  const max = Math.max(...vals, 1);
+  const W = 120, H = 24, n = vals.length, bw = W / n;
+  const bars = vals.map((v, i) =>
+    `<rect x="${(i * bw).toFixed(1)}" y="${(H - (v / max) * H).toFixed(1)}" width="${Math.max(1, bw - 1).toFixed(1)}" height="${((v / max) * H).toFixed(1)}"/>`).join('');
+  return `<svg class="spark" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${bars}</svg>`;
+}
+
+// HTML/CSS bar chart — responsive, no SVG text stretching.
+// opts.line = secondary series (drawn as a faint polyline), opts.lineLabel = its name
+function tbarChart(buckets, valueFn, label, opts = {}) {
+  if (!buckets.length) return '<div class="bchart"><div class="bc-title">no data</div></div>';
+  const vals = buckets.map(valueFn);
+  const max = Math.max(...vals, 1);
+  const n = buckets.length;
+  const bw = Math.min(13, Math.max(3, Math.round(720 / n)));   // bar width px
+  const slot = Math.max(bw + 2, 6);                            // bar + gap
+  const wantW = n * slot;
+  const scrolls = wantW > 1180;                                // (title hint only)
+  const step = Math.max(1, Math.ceil(n / Math.floor(Math.max(wantW, 980) / 66)));
+  let lineSvg = '';
+  const line = opts.line;
+  if (line && line.length === n && line.some(v => v)) {
+    const lmax = Math.max(...line, 1);
+    const d = Math.max(1, n - 1);
+    const pts = line.map((v, i) => `${(i / d * 100).toFixed(2)},${(96 - v / lmax * 92).toFixed(2)}`).join(' ');
+    lineSvg = `<svg class="bc-line" viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points="${pts}"/></svg>`;
+  }
+  const lbl = (b) => b.includes(':') ? b.slice(11) : b.length > 7 ? b.slice(5) : b;
+  return `<div class="bchart">
+    ${label ? `<div class="bc-title">${esc(label)}${opts.lineLabel ? ` · <span class="bc-l2">${esc(opts.lineLabel)} (line)</span>` : ''}${scrolls ? ' · scroll →' : ''}</div>` : ''}
+    <div class="bc-body">
+      <div class="bc-yax">${[1, 0.75, 0.5, 0.25, 0].map(f => `<span>${kfmt(max * f)}</span>`).join('')}</div>
+      <div class="bc-scroll"><div class="bc-inner" style="width:max(100%, ${wantW}px)">
+        <div class="bc-plot">
+          ${vals.map((v, i) => `<div class="bc-bar" style="width:${bw}px;height:${(v / max * 100).toFixed(1)}%" title="${esc(buckets[i])} — ${fmt(v)}"></div>`).join('')}
+          ${lineSvg}
+        </div>
+        <div class="bc-xax">${buckets.map((b, i) => `<span style="width:${bw}px">${i % step === 0 ? esc(lbl(b)) : ''}</span>`).join('')}</div>
+      </div></div>
+    </div>
+  </div>`;
+}
+
+function renderTrends() {
+  const d = trendData;
+  const B = d.buckets;
+  if (!B.length) { $('#trends').innerHTML = '<div class="empty">No sessions found.</div>'; return; }
+  const g = d.grand;
+  const totalsByBucket = b => (d.totals[b] && d.totals[b].tokens) || 0;
+
+  $('#trends').innerHTML = `
+    <div class="tgrand">
+      <span><b>${fmt(g.tokens)}</b> billed tokens</span>
+      <span><b>${fmt(g.sessions)}</b> sessions</span>
+      <span><b>${fmt(g.commands)}</b> commands</span>
+      <span>in <b>${fmt(g.input)}</b></span>
+      <span>cached <b>${fmt(g.cached)}</b></span>
+      <span>out <b>${fmt(g.output)}</b></span>
+      <span>reasoning <b>${fmt(g.reasoning)}</b></span>
+      <span style="margin-left:auto">${B.length} ${perLblN(trendPeriod)} · ${d.sessions} sessions${trendSub ? ' (incl. subagents)' : ''}</span>
+    </div>
+    ${tbarChart(B, totalsByBucket, 'billed tokens per ' + perLbl(trendPeriod))}
+    <div class="tcols">
+      <div>
+        <p class="subh">By base command — click a row for its trend</p>
+        <input class="tfilter" id="cmdFilter" placeholder="filter commands…" oninput="renderTrendTables()">
+        <div id="cmdTable"></div>
+      </div>
+      <div>
+        <p class="subh">By prompt — click a row for its trend</p>
+        <input class="tfilter" id="promptFilter" placeholder="filter prompts…" oninput="renderTrendTables()">
+        <div id="promptTable"></div>
+      </div>
+    </div>`;
+  renderTrendTables();
+}
+
+let trendCmdRows = [], trendPromptRows = [];
+
+function trendDetailRows(r, B) {
+  const T = B.length > 96 ? B.slice(-96) : B;
+  return `<tr class="trow-detail"><td colspan="4">
+    ${tbarChart(B, b => (r.per[b] && r.per[b].tokens) || 0, 'tokens per ' + perLbl(trendPeriod))}
+    <div style="overflow-x:auto"><table><tbody>
+      <tr class="lbl-row"><td>${trendPeriod}${T !== B ? ' (last 96)' : ''}</td>${T.map(b => `<td class="num">${b.slice(5)}</td>`).join('')}</tr>
+      <tr><td class="num">tok</td>${T.map(b => `<td class="num">${kfmt((r.per[b] && r.per[b].tokens) || 0)}</td>`).join('')}</tr>
+      <tr><td class="num">runs</td>${T.map(b => `<td class="num">${(r.per[b] && r.per[b].count) || 0}</td>`).join('')}</tr>
+    </tbody></table></div></td></tr>`;
+}
+
+function renderTrendTables() {
+  const d = trendData, B = d.buckets;
+  const cf = (($('#cmdFilter') || {}).value || '').toLowerCase();
+  const pf = (($('#promptFilter') || {}).value || '').toLowerCase();
+
+  trendCmdRows = d.byCommand.filter(r => r.base.toLowerCase().includes(cf)).slice(0, 200);
+  $('#cmdTable').innerHTML = `<table><thead><tr>
+    <th>Base</th><th class="num">Total tok</th><th class="num">Runs</th><th class="trend-cell">Trend</th></tr></thead><tbody>
+    ${trendCmdRows.map((r, i) => {
+      const open = tExpanded.cmd.has(r.base);
+      return `<tr class="trow" data-tkind="cmd" data-ti="${i}" style="cursor:pointer">
+        <td class="base">${open ? '▾ ' : '▸ '}${esc(r.base)}
+          <span class="cmdlink" data-cmd="${esc(r.base)}" title="open command trends" style="margin-left:6px;border:0">⤢</span></td>
+        <td class="num">${fmt(r.total)}</td><td class="num">${fmt(r.count)}</td>
+        <td>${tspark(r.per, B, 'tokens')}</td></tr>`
+        + (open ? trendDetailRows(r, B) : '');
+    }).join('')}
+  </tbody></table>`;
+
+  trendPromptRows = d.byPrompt.filter(r => r.prompt.toLowerCase().includes(pf)).slice(0, 200);
+  $('#promptTable').innerHTML = `<table><thead><tr>
+    <th>Prompt</th><th class="num">Total tok</th><th class="num">Sess</th><th class="trend-cell">Trend</th></tr></thead><tbody>
+    ${trendPromptRows.map((r, i) => {
+      const open = tExpanded.prompt.has(r.prompt);
+      return `<tr class="trow" data-tkind="prompt" data-ti="${i}" style="cursor:pointer">
+        <td style="max-width:340px" title="${esc(r.prompt).replace(/"/g, '&quot;')}">${open ? '▾ ' : '▸ '}${esc(short(r.prompt, 70))}
+          ${r.project ? `<span class="badge">${esc(r.project)}</span>` : ''}</td>
+        <td class="num">${fmt(r.total)}</td><td class="num">${fmt(r.count)}</td>
+        <td>${tspark(r.per, B, 'tokens')}</td></tr>`
+        + (open ? trendDetailRows(r, B) : '');
+    }).join('')}
+  </tbody></table>`;
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.cmdlink')) return;   // handled by the command-link listener
+  const tr = e.target.closest('.trow');
+  if (tr) {
+    const kind = tr.dataset.tkind;
+    const r = (kind === 'cmd' ? trendCmdRows : trendPromptRows)[+tr.dataset.ti];
+    if (!r) return;
+    const key = kind === 'cmd' ? r.base : r.prompt;
+    const s = tExpanded[kind];
+    if (s.has(key)) s.delete(key); else s.add(key);
+    renderTrendTables();
+    return;
+  }
+  const ec = e.target.closest('.ecmd');
+  if (ec && ecoData) {
+    const c = ecoData.byCommand[+ec.dataset.ei];
+    if (!c) return;
+    if (ecoCmdOpen.has(c.base)) ecoCmdOpen.delete(c.base); else ecoCmdOpen.add(c.base);
+    renderEconomy();
+  }
+});
+
+$('#periodSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  [...$('#periodSeg').children].forEach(x => x.classList.toggle('on', x === b));
+  trendPeriod = b.dataset.p;
+  tExpanded.cmd.clear(); tExpanded.prompt.clear();
+  loadTrends();
+});
+$('#subToggle').addEventListener('change', (e) => { trendSub = e.target.checked; loadTrends(); });
+$('#trModel').addEventListener('change', (e) => { trModel = e.target.value; loadTrends(); });
+$('#trEffort').addEventListener('change', (e) => { trEffort = e.target.value; loadTrends(); });
+
+// ---------------------------------------------------------------------------
+// economy — "where do the tokens go, and what looks wasteful"
+// ---------------------------------------------------------------------------
+let ecoRange = 'all';
+let ecoSub = true;
+let ecoData = null;
+let ecoPoll = null;
+let ecoModel = '', ecoEffort = '';
+const ecoCmdOpen = new Set();
+
+// plain-language notes for the tools/commands Codex uses most
+const CMD_DESC = {
+  write_stdin: 'Polls a still-running foreground process (one an earlier <code>exec_command</code> left open) for more output. <code>chars:""</code> = send nothing, just wait up to <code>yield_time_ms</code> and return whatever it has printed; <code>\\u0003</code> = send Ctrl-C. Each poll can pull up to <code>max_output_tokens</code> of accumulated stdout into context, so a chatty long-running process is re-read every ~30s.',
+  wait: 'Waits for a background cell / spawned agent to finish and returns its output when it does. Same "absorb the gap" effect as write_stdin — token growth during the wait is attributed here.',
+  exec_command: 'A bare <code>exec_command</code> with no <code>cmd</code> — reading more output from an exec session that is still running (like write_stdin). A call <em>with</em> a <code>cmd</code> is grouped under the real command instead (git, sed, …).',
+  apply_patch: 'Applies a unified-diff patch to files in the workspace. Output is usually small (the patch result), so its context cost is low.',
+  web__run: 'Fetches or searches web pages. The returned page text / search results are dropped into context — often several thousand tokens per call.',
+  followup_task: 'Queues a follow-up task for the agent to pick up later.',
+  spawn_agent: 'Starts a subagent thread. The child runs on its own and reports back.',
+  update_plan: 'Updates the agent’s task plan / checklist. Minimal context cost.',
+  sed: 'Usually a ranged file read (<code>sed -n \'1,200p\' file</code>). The whole selected range enters context — cap the range or use <code>rg</code> for just the lines you need.',
+  nl: 'Numbers lines while reading a file (<code>nl -ba file | sed -n \'1,80p\'</code>) — same read-into-context cost as sed/cat.',
+  cat: 'Dumps an entire file into context. Prefer a ranged <code>sed</code>/<code>head</code>/<code>tail</code> or <code>rg</code>.',
+  rg: 'ripgrep. Matching lines plus any <code>-C</code> context enter context; a broad pattern or <code>-C</code> over many files can be large.',
+  'git diff': 'Reads a diff into context. Wide <code>--unified</code> values and whole-tree diffs are expensive; scope to paths.',
+  'git show': 'Reads a commit (message + diff) into context.',
+  'git log': 'Reads commit history into context; <code>--stat</code> / large ranges add up.',
+  'git status': 'Cheap, but run many times per session it accumulates.',
+  node: 'Runs a Node script; its stdout enters context.',
+  'pnpm exec': 'Runs a local tool (biome, tsc, tests…); linter/test output can be large.',
+  rtk: 'The rtk proxy wrapper — the real command follows (<code>rtk git …</code>, <code>rtk pnpm …</code>). Cost is whatever it wraps.',
+  wc: 'Counts lines/words — tiny output on its own, but often run in a batch that reads files too.',
+};
+
+// ---------------------------------------------------------------------------
+// per-command trends over time (inline in Economy + in the side overlay)
+// ---------------------------------------------------------------------------
+const CT_METRICS = [
+  { k: 'delta', label: 'Δ tokens' },
+  { k: 'outTokens', label: 'Output tokens' },
+  { k: 'calls', label: 'Calls' },
+  { k: 'avgOut', label: 'Avg out/call' },
+  { k: 'truncated', label: 'Truncated' },
+];
+const ctState = new Map();   // base -> { period, metric, sub, data, loading }
+
+function ctGet(base) {
+  if (!ctState.has(base)) ctState.set(base, {
+    period: 'week', metric: 'delta', sub: true,
+    model: ecoModel || trModel || '', effort: ecoEffort || trEffort || '',
+    data: null, loading: false,
+  });
+  return ctState.get(base);
+}
+async function ctLoad(base) {
+  const s = ctGet(base);
+  s.loading = true;
+  const r = await fetch(`/api/command?base=${encodeURIComponent(base)}&period=${s.period}&subagents=${s.sub ? 1 : 0}${facetQS(s.model, s.effort)}`).then(x => x.json());
+  s.loading = false;
+  if (!r.building) s.data = r;
+  ctRerender(base);
+}
+function ctRerender(base) {
+  document.querySelectorAll(`[data-ct-host="${cssEsc(base)}"]`).forEach(el => { el.innerHTML = ctPanel(base); });
+}
+const cssEsc = (s) => String(s).replace(/["\\]/g, '\\$&');
+
+function ctMetricVal(d, b, metric) {
+  const S = d.series;
+  if (metric === 'avgOut') return (S.calls[b] ? (S.outTokens[b] || 0) / S.calls[b] : 0);
+  return (S[metric] && S[metric][b]) || 0;
+}
+function ctPerFn(metric) {
+  if (metric === 'avgOut') return (o) => (o && o.calls ? o.outTokens / o.calls : 0);
+  if (metric === 'delta') return (o) => (o && o.calls) || 0;   // no per-sample delta — show runs
+  return (o) => (o && o[metric]) || 0;
+}
+
+function ctPanel(base) {
+  const s = ctGet(base);
+  const seg = (name, cur, opts) => `<span class="seg" data-ct-seg="${name}">${opts.map(o =>
+    `<button data-ct-${name}="${o.k}" class="${o.k === cur ? 'on' : ''}">${esc(o.label)}</button>`).join('')}</span>`;
+  const fac = (s.data && s.data.facets) || { models: [], efforts: [] };
+  const facSel = (kind, cur, vals, allLabel) => `<select data-ct-${kind} class="facet">
+    <option value="">${allLabel}</option>${vals.map(v => `<option value="${attr(v)}"${v === cur ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select>`;
+  const ctrls = `<div class="ct-ctrls" data-ct-base="${esc(base)}">
+    ${seg('period', s.period, [{ k: 'hour', label: 'Hour' }, { k: 'day', label: 'Day' }, { k: 'week', label: 'Week' }, { k: 'month', label: 'Month' }])}
+    ${seg('metric', s.metric, CT_METRICS)}
+    ${facSel('model', s.model, fac.models, 'all models')}
+    ${facSel('effort', s.effort, fac.efforts, 'all efforts')}
+    <label style="font-size:11px;color:var(--dim)"><input type="checkbox" data-ct-sub ${s.sub ? 'checked' : ''}> subagents</label>
+  </div>`;
+
+  if (s.loading || !s.data) return ctrls + '<div class="empty">Loading trend…</div>';
+  const d = s.data;
+  if (!d.buckets.length) return ctrls + '<p class="blurb">No time-series data for this command.</p>';
+
+  const B = d.buckets;
+  const mLabel = (CT_METRICS.find(m => m.k === s.metric) || {}).label;
+  const perB = {}; B.forEach(b => { perB[b] = ctMetricVal(d, b, s.metric); });
+  const line = s.metric === 'calls' ? null : B.map(b => d.series.calls[b] || 0);
+
+  const t = d.totals;
+  const grand = `<div class="tgrand" style="margin:6px 0 8px">
+    <span><b>${fmt(t.delta)}</b> Δ tokens</span>
+    <span><b>${fmt(t.outTokens)}</b> output tokens</span>
+    <span><b>${fmt(t.calls)}</b> calls</span>
+    <span><b>${fmt(t.truncated)}</b> truncated</span>
+    <span style="margin-left:auto">${B.length} ${perLblN(s.period)} · ${fmt(t.sessions)} sessions</span>
+  </div>`;
+
+  const open = s.openRows || (s.openRows = new Set());
+  // per-row (process / invocation) metric — there's no per-row Δ tokens, so
+  // fall back to output tokens for the Δ view
+  const rowMetric = s.metric === 'delta' ? 'outTokens' : s.metric;
+  const rowLabel = s.metric === 'delta' ? 'Output tokens' : mLabel;
+  const rpf = ctPerFn(rowMetric);
+  const sampRows = (rows) => rows.map(r => {
+    const o = open.has(r.cmd);
+    let h = `<tr class="ctrow" data-ct-row="${attr(r.cmd)}" data-ct-rowbase="${attr(base)}" style="cursor:pointer">
+      <td class="cmd" title="${attr(r.cmd)}">${o ? '▾ ' : '▸ '}${esc(short(r.cmd, 120))}</td>
+      <td class="num">${fmt(r.count)}</td>
+      <td class="num">${fmt(r.out)}</td>
+      <td class="trend-cell">${tspark(r.per, B, rpf)}</td></tr>`;
+    if (o) {
+      const T = B.length > 96 ? B.slice(-96) : B;
+      h += `<tr class="trow-detail"><td colspan="4">
+        ${tbarChart(B, b => (rpf(r.per[b], b) || 0), esc(short(r.cmd, 90)) + ' — ' + rowLabel.toLowerCase() + ' per ' + perLbl(s.period))}
+        <div style="overflow-x:auto"><table><tbody>
+          <tr class="lbl-row"><td>${s.period}${T !== B ? ' (last 96)' : ''}</td>${T.map(b => `<td class="num">${b.slice(5)}</td>`).join('')}</tr>
+          <tr><td class="num">${esc(rowLabel)}</td>${T.map(b => `<td class="num">${kfmt(rpf(r.per[b], b) || 0)}</td>`).join('')}</tr>
+          <tr><td class="num">runs</td>${T.map(b => `<td class="num">${(r.per[b] && r.per[b].calls) || 0}</td>`).join('')}</tr>
+        </tbody></table></div></td></tr>`;
+    }
+    return h;
+  }).join('');
+
+  const realSamples = (d.samples || []).filter(x => x.cmd && x.cmd !== base && x.cmd.length > base.length + 1);
+  const samplesTbl = realSamples.length ? `
+    <p class="subh" style="margin-top:10px">Actual invocations — click a row for its ${esc(rowLabel.toLowerCase())} trend</p>
+    <table><thead><tr><th>Command</th><th class="num">Runs</th><th class="num">~Out tok</th><th class="trend-cell">Trend</th></tr></thead>
+    <tbody>${sampRows(realSamples)}</tbody></table>` : '';
+  const pollsTbl = (d.pollTargets || []).length ? `
+    <p class="subh" style="margin-top:10px">Processes being polled — click a row for its ${esc(rowLabel.toLowerCase())} trend</p>
+    <table><thead><tr><th>Process</th><th class="num">Polls</th><th class="num">~Tokens</th><th class="trend-cell">Trend</th></tr></thead>
+    <tbody>${sampRows(d.pollTargets)}</tbody></table>` : '';
+
+  return ctrls + grand
+    + `<p class="subh" style="margin-top:8px">${esc(mLabel)} per ${perLbl(s.period)} — all invocations of <code>${esc(base)}</code></p>`
+    + tbarChart(B, b => perB[b], null, line ? { line, lineLabel: 'calls' } : {})
+    + samplesTbl + pollsTbl;
+}
+
+// inline block for an expanded Economy "By command" row
+function cmdDetail(c) {
+  const desc = CMD_DESC[c.base];
+  if (!ctGet(c.base).data && !ctGet(c.base).loading) ctLoad(c.base);
+  return `${desc ? `<p class="blurb" style="margin:2px 0 8px">${desc}</p>` : ''}
+    <div data-ct-host="${esc(c.base)}">${ctPanel(c.base)}</div>`;
+}
+
+// side-overlay view, reached by clicking a command name anywhere
+function openCommand(base) {
+  $('#overlay').classList.add('on');
+  if (!ctGet(base).data && !ctGet(base).loading) ctLoad(base);
+  const desc = CMD_DESC[base];
+  $('#detailBody').innerHTML = `
+    <h3 style="margin:0 0 4px">${esc(base)}</h3>
+    ${desc ? `<p class="blurb" style="margin:2px 0 8px">${desc}</p>` : ''}
+    <div data-ct-host="${esc(base)}">${ctPanel(base)}</div>`;
+}
+
+// segmented-control + row-expand handling for command-trend panels
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-ct-period],[data-ct-metric]');
+  if (b) {
+    const base = b.closest('.ct-ctrls') && b.closest('.ct-ctrls').dataset.ctBase;
+    if (!base) return;
+    const s = ctGet(base);
+    if (b.dataset.ctPeriod && b.dataset.ctPeriod !== s.period) { s.period = b.dataset.ctPeriod; s.data = null; ctRerender(base); ctLoad(base); }
+    else if (b.dataset.ctMetric) { s.metric = b.dataset.ctMetric; ctRerender(base); }
+    return;
+  }
+  const row = e.target.closest('.ctrow');
+  if (row) {
+    const base = row.dataset.ctRowbase;
+    const s = ctGet(base);
+    const set = s.openRows || (s.openRows = new Set());
+    const key = row.dataset.ctRow;
+    if (set.has(key)) set.delete(key); else set.add(key);
+    ctRerender(base);
+  }
+});
+document.addEventListener('change', (e) => {
+  const ctrls = e.target.closest('.ct-ctrls');
+  if (!ctrls) return;
+  const base = ctrls.dataset.ctBase;
+  const s = ctGet(base);
+  if (e.target.matches('[data-ct-model]')) s.model = e.target.value;
+  else if (e.target.matches('[data-ct-effort]')) s.effort = e.target.value;
+  else if (e.target.matches('[data-ct-sub]')) s.sub = e.target.checked;
+  else return;
+  s.data = null; ctRerender(base); ctLoad(base);
+});
+// clickable command names → overlay
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('.cmdlink');
+  if (el) { e.stopPropagation(); openCommand(el.dataset.cmd); }
+});
+
+async function loadEconomy() {
+  const el = $('#economy');
+  const r = await fetch(`/api/economy?range=${ecoRange}&subagents=${ecoSub ? 1 : 0}${facetQS(ecoModel, ecoEffort)}`).then(x => x.json());
+  if (r.building) {
+    const p = r.progress || {};
+    el.innerHTML = `<div class="empty">Building rollup cache… ${p.done || 0} / ${p.total || '?'} sessions</div>`;
+    clearTimeout(ecoPoll); ecoPoll = setTimeout(loadEconomy, 1500);
+    return;
+  }
+  ecoData = r;
+  fillFacet($('#ecoModel'), r.facets && r.facets.models, ecoModel, 'all models');
+  fillFacet($('#ecoEffort'), r.facets && r.facets.efforts, ecoEffort, 'all efforts');
+  renderEconomy();
+}
+
+function renderEconomy() {
+  const d = ecoData, t = d.totals;
+  const pollPct = t.toolCalls ? Math.round(100 * t.pollTurns / t.toolCalls) : 0;
+  const sessLink = (s) => `openDetail('${s.sessionId}')`;
+
+  $('#economy').innerHTML = `
+    <div class="cards">
+      <div class="ecard">
+        <div class="big">${kfmtN(t.outTokens)}</div>
+        <div class="cap">tokens of command output read back</div>
+        <div class="hint">Every command's stdout is fed into the model's context. This is the running cost of "look, then act".</div>
+      </div>
+      <div class="ecard warn">
+        <div class="big">${fmt(t.truncatedCalls)}</div>
+        <div class="cap">results cut off at the output limit</div>
+        <div class="hint">The model paid for a partial answer and often had to re-run a narrower command.</div>
+      </div>
+      <div class="ecard warn">
+        <div class="big">${fmt(t.pollTurns)} <span style="font-size:13px;color:var(--dim)">/ ${pollPct}%</span></div>
+        <div class="cap">polling / waiting round-trips</div>
+        <div class="hint">Turns spent watching a running process (empty <code>write_stdin</code>, <code>wait</code>) instead of doing work.</div>
+      </div>
+      <div class="ecard warn">
+        <div class="big">${fmt(t.dupeRuns)}</div>
+        <div class="cap">redundant re-runs of the same command</div>
+        <div class="hint">≈ ${kfmtN(t.dupeTokens)} tokens of output for commands run 3+ times unchanged in one session.</div>
+      </div>
+      <div class="ecard">
+        <div class="big">${kfmtN(t.modelOutput + t.modelReasoning)}</div>
+        <div class="cap">model output + reasoning tokens</div>
+        <div class="hint">What the model itself generated across ${fmt(t.sessions)} sessions (${kfmtN(t.modelReasoning)} reasoning).</div>
+      </div>
+    </div>
+
+    <div class="esec">
+      <h3>Which commands feed the most text back to the model</h3>
+      <p class="blurb">Big <b>and</b> frequent → the best targets. Click a row for what the command does and
+        its actual invocations. Narrower flags, <code>| tail</code>, <code>--quiet</code>,
+        <code>rg</code> instead of <code>cat</code>, or asking a tool for specific JSON fields all cut this directly.</p>
+      <table><thead><tr>
+        <th>Command</th><th class="num">Output tokens</th><th class="num">Calls</th>
+        <th class="num">Avg / call</th><th class="num">Truncated</th></tr></thead><tbody>
+        ${d.byCommand.slice(0, 24).map((c, i) => {
+          const open = ecoCmdOpen.has(c.base);
+          let h = `<tr class="ecmd" data-ei="${i}" style="cursor:pointer">
+            <td class="base">${open ? '▾ ' : '▸ '}${esc(c.base)}</td>
+            <td class="num">${fmt(c.tokens)}</td>
+            <td class="num">${fmt(c.calls)}</td>
+            <td class="num">${fmt(c.calls ? c.tokens / c.calls : 0)}</td>
+            <td class="num">${c.truncated || '·'}</td></tr>`;
+          if (open) h += `<tr class="trow-detail"><td colspan="5">${cmdDetail(c)}</td></tr>`;
+          return h;
+        }).join('')}
+      </tbody></table>
+    </div>
+
+    <div class="esec">
+      <h3>Biggest single command outputs</h3>
+      <p class="blurb">Individual results that dumped the most into context at once. Click to open the session.</p>
+      <table><thead><tr>
+        <th class="num">~Tokens</th><th>Command</th><th>Session</th></tr></thead><tbody>
+        ${d.bigOutputs.map(b => `<tr onclick="${sessLink(b)}" style="cursor:pointer">
+          <td class="num">${fmt(b.tokens)}${b.truncated ? ' ✂' : ''}</td>
+          <td class="cmd">${esc(short(b.cmd || b.base, 90))}</td>
+          <td style="color:var(--dim)">${esc(b.project || '')} · ${esc(short(b.prompt, 44))}</td></tr>`).join('')}
+      </tbody></table>
+    </div>
+
+    <div class="esec">
+      <h3>Commands re-run unchanged (3+ times in one session)</h3>
+      <p class="blurb">Some repetition is real iteration. Repeated full test suites, re-reads of the same file,
+        or repeated <code>git status</code> usually aren't.</p>
+      <table><thead><tr>
+        <th class="num">Runs</th><th class="num">~Tokens</th><th>Command</th><th>Session</th></tr></thead><tbody>
+        ${d.dupes.map(x => `<tr onclick="${sessLink(x)}" style="cursor:pointer">
+          <td class="num">${x.count}×</td>
+          <td class="num">${fmt(x.tokens)}</td>
+          <td class="cmd">${esc(short(x.cmd, 90))}</td>
+          <td style="color:var(--dim)">${esc(x.project || '')} · ${esc(short(x.prompt, 40))}</td></tr>`).join('')}
+      </tbody></table>
+    </div>
+
+    <div class="esec">
+      <h3>Sessions dominated by polling</h3>
+      <p class="blurb">A high share of turns spent on <code>write_stdin</code>/<code>wait</code>. Running the long process
+        detached and checking it once when done removes most of these round-trips.</p>
+      <table><thead><tr>
+        <th class="num">Poll %</th><th class="num">Poll / total calls</th><th>Session</th></tr></thead><tbody>
+        ${d.pollSessions.map(s => `<tr onclick="${sessLink(s)}" style="cursor:pointer">
+          <td class="num">${s.pct}%</td>
+          <td class="num">${s.pollTurns} / ${s.toolCalls}</td>
+          <td>${esc(s.project || '')} · ${esc(short(s.prompt, 60))}</td></tr>`).join('')}
+      </tbody></table>
+    </div>
+
+    <p class="blurb" style="margin-top:20px">Token counts for command output are estimated (~4 chars/token) from the
+      logged tool results. Model reasoning is encrypted in the logs, so the "why" behind each step isn't shown — only what ran and what came back.</p>`;
+}
+
+$('#ecoRange').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  [...$('#ecoRange').children].forEach(x => x.classList.toggle('on', x === b));
+  ecoRange = b.dataset.r; loadEconomy();
+});
+$('#ecoSub').addEventListener('change', (e) => { ecoSub = e.target.checked; loadEconomy(); });
+$('#ecoModel').addEventListener('change', (e) => { ecoModel = e.target.value; loadEconomy(); });
+$('#ecoEffort').addEventListener('change', (e) => { ecoEffort = e.target.value; loadEconomy(); });
+
+// ---------------------------------------------------------------------------
+// tabs
+// ---------------------------------------------------------------------------
+let curTab = 'running';
+const TABS = ['running', 'history', 'trends', 'economy'];
+function showTab(name) {
+  if (!TABS.includes(name)) name = 'running';
+  curTab = name;
+  for (const t of TABS) $('#tab-' + t).hidden = t !== name;
+  [...$('#tabs').children].forEach(a => a.classList.toggle('on', a.dataset.tab === name));
+  if (name === 'history' && !histAll.length) loadHistory();
+  if (name === 'trends' && !trendData) loadTrends();
+  if (name === 'economy' && !ecoData) loadEconomy();
+}
+window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
+
+connect();
+showTab(location.hash.slice(1) || 'running');
+setInterval(() => { if (curTab === 'history') loadHistory(); }, 60000);
+</script>
+</body>
+</html>

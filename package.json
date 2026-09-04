@@ -1,0 +1,42 @@
+{
+  "name": "codexmon",
+  "version": "0.1.0",
+  "description": "Live and historical monitor for OpenAI Codex CLI usage — reads ~/.codex/sessions and shows running agents, token consumption over time, per-command/per-prompt trends, a token-economy audit, and subagent lineage.",
+  "keywords": [
+    "codex",
+    "openai-codex",
+    "codex-cli",
+    "monitor",
+    "dashboard",
+    "observability",
+    "token-usage",
+    "llm",
+    "agents",
+    "cli"
+  ],
+  "homepage": "https://github.com/kwpoore-lab/codexmon#readme",
+  "bugs": "https://github.com/kwpoore-lab/codexmon/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kwpoore-lab/codexmon.git"
+  },
+  "author": "Ken Poore",
+  "license": "MIT",
+  "bin": {
+    "codexmon": "server.js"
+  },
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "files": [
+    "server.js",
+    "index.html",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {}
+}
