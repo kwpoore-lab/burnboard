@@ -275,7 +275,12 @@ function liveSnapshot() {
     }
   }
 
-  return { now: Date.now(), threads: rows, rateLimits, rateLimitsAt: rlAt || null, usage };
+  // Claude Code keeps its own quota outside the transcripts — read it straight
+  // from the source so the header can show both agents' headroom
+  const claudeQuota = SOURCE_BY_ID.get('claude');
+  const claudeLimits = claudeQuota && claudeQuota.quota ? claudeQuota.quota() : null;
+
+  return { now: Date.now(), threads: rows, rateLimits, rateLimitsAt: rlAt || null, claudeLimits, usage };
 }
 
 function historySnapshot(date) {

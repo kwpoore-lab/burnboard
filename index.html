@@ -55,6 +55,9 @@
   .facetmark { display: inline-flex; vertical-align: -2px; margin-left: 8px; }
   .facetmark + select.facet { margin-left: 4px; }
   .mmark { display: inline-flex; vertical-align: -2px; margin-right: 4px; }
+  .hdrlim, .agentlim { display: inline-flex; align-items: center; gap: 5px; }
+  .hdrlim b, .agentlim b { color: var(--fg); font-weight: 600; }
+  #hdrstat .sep { color: var(--border); }
   .badge.tier { color: var(--purple); }
   .badge.review { color: var(--yellow); }
   .badge.agent { color: var(--purple); border-color: #4a3a6a; }
@@ -425,14 +428,40 @@ function render(snap) {
   $('#conn').classList.add('ok');
   const threads = (snap.threads || []).filter(t => !srcFilter || t.source === srcFilter);
   const running = threads.filter(t => t.status === 'running');
-  const wk = snap.rateLimits && snap.rateLimits.primary
-    ? ` · ${snap.rateLimits.primary.used_percent.toFixed(0)}% ${winShort(snap.rateLimits.primary.window_minutes)}` : '';
-  $('#hdrstat').textContent =
-    `${threads.length} live · ${running.length} running · updated ${new Date(snap.now).toLocaleTimeString()}${wk}`;
+  const heads = agentLimits(snap).map(l => {
+    const w = tightestWindow(l.windows);
+    return `<span class="hdrlim" title="${attr(l.label)}: ${w.used_percent}% of the ${winLabel(w.window_minutes)} limit used${
+      untilReset(w.resets_at) ? `, resets in ${untilReset(w.resets_at)}` : ''}${l.staleFor ? ` (as of ${l.staleFor})` : ''}">${
+      l.mark}<b>${pctLeft(w.used_percent)}%</b> left ${winShort(w.window_minutes)}</span>`;
+  }).join('<span class="sep"> · </span>');
+  $('#hdrstat').innerHTML =
+    `${threads.length} live · ${running.length} running · updated ${esc(new Date(snap.now).toLocaleTimeString())}`
+    + (heads ? ' · ' + heads : '');
 
   renderUsage(snap);
   renderLiveTree(threads);
 }
+
+// Codex reports its windows in the rollout stream; Claude Code caches its own
+// in ~/.claude.json. Both are normalised to {used_percent, window_minutes,
+// resets_at} so the header and the usage bar can treat them alike.
+function agentLimits(snap) {
+  const out = [];
+  const rl = snap.rateLimits;
+  const codex = [rl && rl.primary, rl && rl.secondary].filter(Boolean);
+  if (codex.length) out.push({ id: 'codex', label: 'Codex', mark: OPENAI_MARK, windows: codex, staleFor: '' });
+  const cl = snap.claudeLimits;
+  if (cl && cl.windows && cl.windows.length) {
+    out.push({
+      id: 'claude', label: 'Claude Code', mark: CLAUDE_MARK, windows: cl.windows,
+      staleFor: cl.fetchedAtMs ? new Date(cl.fetchedAtMs).toLocaleTimeString() : '',
+    });
+  }
+  return out;
+}
+// the binding window is the one with the least headroom left
+const tightestWindow = (ws) => ws.reduce((a, b) => (b.used_percent > a.used_percent ? b : a));
+const pctLeft = (used) => (100 - used).toFixed(used > 99 ? 1 : 0);
 
 function winShort(mins) {
   if (mins >= 10080) return 'wk';
@@ -444,8 +473,11 @@ function winLabel(mins) {
   if (mins >= 1440) return `${Math.round(mins / 1440)}-day`;
   return `${Math.round(mins / 60)}-hour`;
 }
-function untilReset(unixSec) {
-  const ms = unixSec * 1000 - Date.now();
+// Codex reports a unix timestamp, Claude Code an ISO string
+function untilReset(at) {
+  const when = typeof at === 'number' ? at * 1000 : Date.parse(at);
+  if (!when || isNaN(when)) return '';
+  const ms = when - Date.now();
   if (ms <= 0) return 'now';
   const h = ms / 3600000;
   if (h >= 48) return Math.round(h / 24) + 'd';
@@ -457,12 +489,13 @@ function renderUsage(snap) {
   const el = $('#usageSummary');
   const rl = snap.rateLimits, u = snap.usage || {};
   const parts = [];
-  const windowStat = (w, name) => {
-    if (!w) return;
-    const rem = (100 - w.used_percent).toFixed(w.used_percent > 99 ? 1 : 0);
-    parts.push(`<span title="${name} limit window"><b>${w.used_percent.toFixed(w.used_percent < 10 ? 1 : 0)}%</b> used · <b>${rem}%</b> left of ${winLabel(w.window_minutes)} limit${w.resets_at ? ` · resets in ${untilReset(w.resets_at)}` : ''}</span>`);
-  };
-  if (rl) { windowStat(rl.primary, 'primary'); windowStat(rl.secondary, 'secondary'); }
+  for (const l of agentLimits(snap)) {
+    const windows = l.windows.map(w =>
+      `<b>${pctLeft(w.used_percent)}%</b> left of ${winLabel(w.window_minutes)}${
+        untilReset(w.resets_at) ? ` (resets in ${untilReset(w.resets_at)})` : ''}`).join(' · ');
+    parts.push(`<span class="agentlim" title="${attr(l.label)} limits${
+      l.staleFor ? ` — as of ${l.staleFor}, refreshed when Claude Code runs` : ''}">${l.mark}${windows}</span>`);
+  }
   if (u.haveRollups) {
     parts.push(`<span><b>${kfmtN(u.today)}</b> tokens today</span>`);
     parts.push(`<span><b>${kfmtN(u.week)}</b> this week</span>`);
