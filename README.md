@@ -202,5 +202,7 @@ an optional `source=` filter; omit it for the combined view.
 burnboard is an independent, unofficial tool. It is **not affiliated with, endorsed by, or
 sponsored by OpenAI or Anthropic**. "OpenAI" and "Codex" are trademarks of OpenAI; "Anthropic"
 and "Claude" are trademarks of Anthropic. They are used here only to identify the products this
-tool reads data from, and the model marks shown next to a session are the same kind of nominative
-reference — a label for whose model ran that prompt.
+tool reads data from. The logos shown next to a session are the vendors' own marks (OpenAI's
+logomark from OpenAI's GitHub avatar; the Claude mark from claude.ai/favicon.svg), embedded
+unmodified apart from colour and used the same way — as a label for whose model ran that prompt,
+not as any part of burnboard's own branding.
