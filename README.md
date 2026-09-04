@@ -196,3 +196,11 @@ is source-agnostic and simply carries a `source` tag through to the UI.
 
 Every session record carries `source` (`"codex"` or `"claude"`). The aggregate endpoints accept
 an optional `source=` filter; omit it for the combined view.
+
+## Trademarks
+
+burnboard is an independent, unofficial tool. It is **not affiliated with, endorsed by, or
+sponsored by OpenAI or Anthropic**. "OpenAI" and "Codex" are trademarks of OpenAI; "Anthropic"
+and "Claude" are trademarks of Anthropic. They are used here only to identify the products this
+tool reads data from, and the model marks shown next to a session are the same kind of nominative
+reference — a label for whose model ran that prompt.

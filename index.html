@@ -44,7 +44,11 @@
   h2:first-child { margin-top: 6px; }
   .badge { font: 11px/1.4 var(--mono); background: var(--panel2); border: 1px solid var(--border);
     border-radius: 4px; padding: 1px 6px; color: var(--dim); white-space: nowrap; }
-  .badge.model { color: var(--accent); border-color: #24406a; }
+  .badge.model { color: var(--mcol, var(--accent)); border-color: color-mix(in srgb, var(--mcol, var(--accent)) 45%, var(--border));
+    background: color-mix(in srgb, var(--mcol, var(--accent)) 14%, var(--panel2));
+    display: inline-flex; align-items: center; gap: 5px; }
+  .mlogo { width: 11px; height: 11px; display: block; flex: none; }
+  .mmark { display: inline-flex; vertical-align: -2px; margin-right: 4px; }
   .badge.tier { color: var(--purple); }
   .badge.review { color: var(--yellow); }
   .badge.agent { color: var(--purple); border-color: #4a3a6a; }
@@ -55,14 +59,14 @@
   .dot.stale { background: var(--dim); }
 
   /* focus panel — one per active agent */
-  .focus { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--green);
+  .focus { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--mcol, var(--green));
     border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
   .focus-wrap { position: relative; }
   .focus-wrap .tree-tick { position: absolute; left: -14px; top: 22px; width: 12px; height: 1px;
     background: var(--border); }
   .focus-wrap .tree-tick::before { content: ''; position: absolute; left: 0; bottom: 0;
     width: 1px; height: 34px; background: var(--border); }
-  .focus.nested { border-left-color: var(--purple); background: var(--panel2); }
+  .focus.nested { background: var(--panel2); }
   .focus.nested .ftitle { font-size: 13.5px; }
   .fhead { display: flex; align-items: center; gap: 8px; cursor: pointer; flex-wrap: wrap; }
   .caret { display: inline-block; color: var(--dim); font-size: 11px; transition: transform .12s; width: 10px; }
@@ -81,7 +85,7 @@
   .focus.expanded .fdetail { display: block; }
   .fpath { font-family: var(--mono); font-size: 11px; color: var(--dim); word-break: break-all; }
   .prompt { margin: 10px 0; padding: 9px 11px; background: var(--panel2); border-radius: 6px;
-    border-left: 2px solid var(--accent); }
+    border-left: 2px solid var(--mcol, var(--accent)); }
   .prompt .lbl { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .6px; }
   .prompt p { margin: 3px 0 0; white-space: pre-wrap; max-height: 130px; overflow: auto; }
   .statline { display: flex; gap: 16px; flex-wrap: wrap; font: 12px/1.5 var(--mono); color: var(--dim);
@@ -304,6 +308,70 @@ function ago(ms) {
   const m = Math.round(s / 60);
   if (m < 60) return m + 'm ago';
   return Math.round(m / 60) + 'h ago';
+}
+// ---- model identity -------------------------------------------------------
+// Each model gets one colour + one mark, so a panel's provenance reads at a
+// glance: the OpenAI blossom for Codex models, the Claude burst for Claude
+// Code, the terminal glyph for Codex's auto-review guardian.
+const OPENAI_MARK = '<svg class="mlogo" viewBox="0 0 24 24" aria-hidden="true">'
+  + '<g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round">'
+  + '<path d="M12 2.4C15.6 6 15.6 18 12 21.6 8.4 18 8.4 6 12 2.4Z"/>'
+  + '<path d="M12 2.4C15.6 6 15.6 18 12 21.6 8.4 18 8.4 6 12 2.4Z" transform="rotate(60 12 12)"/>'
+  + '<path d="M12 2.4C15.6 6 15.6 18 12 21.6 8.4 18 8.4 6 12 2.4Z" transform="rotate(120 12 12)"/>'
+  + '</g></svg>';
+const CLAUDE_MARK = (() => {
+  let rays = '';
+  for (let i = 0; i < 12; i++) {
+    const long = i % 2 === 0;
+    const tip = long ? 2.2 : 5.4, half = long ? 1.5 : 1.2;
+    rays += `<path d="M12 ${tip} ${12 + half} ${(tip + 12) / 2} 12 12 ${12 - half} ${(tip + 12) / 2}Z"`
+      + ` transform="rotate(${i * 30} 12 12)"/>`;
+  }
+  return `<svg class="mlogo" viewBox="0 0 24 24" aria-hidden="true"><g fill="currentColor">${rays}</g></svg>`;
+})();
+const CODEX_MARK = '<svg class="mlogo" viewBox="0 0 24 24" aria-hidden="true">'
+  + '<rect x="2.2" y="4" width="19.6" height="16" rx="4" fill="none" stroke="currentColor" stroke-width="2"/>'
+  + '<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M7.4 9.4 10.4 12 7.4 14.6"/><path d="M12.6 15.4h4.2"/></g></svg>';
+
+const MODEL_COLORS = {
+  // Codex
+  'sol': '#f0a13a', 'terra': '#e0687e', 'luna': '#7aa2f7', 'gpt-5.5': '#9aa7b4',
+  'codex-auto-review': '#2dd4bf',
+  // Claude Code
+  'opus': '#bc8cff', 'sonnet': '#6ee7a8', 'haiku': '#e8875a',
+};
+// unknown/new models still get a stable colour of their own
+function hashHue(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+function modelStyle(model, source) {
+  const m = String(model || '').toLowerCase();
+  if (!m) return { color: '#8b98a5', mark: '', label: '' };
+  const review = m.includes('auto-review') || m.includes('guardian');
+  const claude = source === 'claude' || m.startsWith('claude');
+  let color = MODEL_COLORS[m];
+  if (!color) color = MODEL_COLORS[m.split('-').pop()];       // gpt-5.6-sol → sol
+  if (!color) {                                              // claude-sonnet-5 → sonnet
+    const hit = Object.keys(MODEL_COLORS).find(k => m.includes(k));
+    if (hit) color = MODEL_COLORS[hit];
+  }
+  if (!color) color = `hsl(${hashHue(m)} 62% 66%)`;
+  return { color, mark: review ? CODEX_MARK : claude ? CLAUDE_MARK : OPENAI_MARK, label: model };
+}
+// full badge, mark + name, tinted with the model colour
+function modelBadge(model, source) {
+  const mi = modelStyle(model, source);
+  if (!mi.label) return '';
+  return `<span class="badge model" style="--mcol:${mi.color}"
+    title="model: ${attr(model)}">${mi.mark}${esc(model)}</span>`;
+}
+// bare mark, for tight spots (meta lines, table cells)
+function modelMark(model, source) {
+  const mi = modelStyle(model, source);
+  return mi.mark ? `<span class="mmark" style="color:${mi.color}" title="model: ${attr(model)}">${mi.mark}</span>` : '';
 }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 // use inside a double-quoted HTML attribute
@@ -546,13 +614,18 @@ function focusBlock(t, depth) {
     : t.id.slice(0, 8));
   const badges = [];
   badges.push(srcBadge(t.source));
-  if (t.primaryModel) badges.push(`<span class="badge model">${esc(t.primaryModel)}</span>`);
+  if (t.primaryModel) badges.push(modelBadge(t.primaryModel, t.source));
   if (t.effort) badges.push(`<span class="badge">effort:${esc(t.effort)}</span>`);
   if (t.serviceTier) badges.push(`<span class="badge tier">${esc(t.serviceTier)}</span>`);
   if (t.autoReview) badges.push(`<span class="badge review">auto-review</span>`);
   if (t.agentNickname) badges.push(`<span class="badge agent">↳ ${esc(t.agentNickname)} d${t.depth}</span>`);
   if (t.originator) badges.push(`<span class="badge">${esc(t.originator)}</span>`);
 
+  // guardians report no model of their own — label them as Codex's reviewer
+  const mstyle = modelStyle(t.primaryModel
+    || ((t.autoReview || t.agentKind === 'guardian') ? 'codex-auto-review' : ''), t.source);
+  const mtag = t.primaryModel ? modelMark(t.primaryModel, t.source) + esc(t.primaryModel)
+    : (mstyle.mark ? `<span class="mmark" style="color:${mstyle.color}">${mstyle.mark}</span>codex reviewer` : '');
   const tk = t.tokens || {};
   const ctxPct = t.contextUsed != null ? t.contextUsed : null;
   const proj = t.git ? `${esc(t.git.repo || t.project)} @ ${esc(t.git.branch)}` : esc(t.project || '');
@@ -568,7 +641,8 @@ function focusBlock(t, depth) {
   const promptLine = t.lastUserText || t.firstUserText || '';
 
   return `
-    <div class="focus ${open ? 'expanded' : ''} ${nested ? 'nested' : ''}" data-id="${t.id}">
+    <div class="focus ${open ? 'expanded' : ''} ${nested ? 'nested' : ''}" data-id="${t.id}"
+         style="--mcol:${mstyle.color}">
       <div class="fhead" onclick="toggleExp('${t.id}')">
         <span class="caret">▸</span>
         <span class="dot ${t.status}"></span>
@@ -579,7 +653,7 @@ function focusBlock(t, depth) {
         <span class="fhead-tok">${kfmtN(t.cumReqTokens || tk.total_tokens)} tok${ctxPct != null ? ` · ${ctxPct}% ctx` : ''} · ${t.toolCallCount} cmds · ${t.turnsCompleted}/${t.turnsStarted} turns${t.compactions ? ` · ${t.compactions}⤺` : ''}</span>
         <a href="#" onclick="openDetail('${t.id}');event.stopPropagation();return false" class="tl-link">full timeline →</a>
       </div>
-      <div class="fmeta">${proj}${t.primaryModel ? ' · ' + esc(t.primaryModel) : ''}${t.effort ? ' · effort:' + esc(t.effort) : ''}${t.serviceTier ? ' · ' + esc(t.serviceTier) : ''}</div>
+      <div class="fmeta">${proj}${mtag ? ' · ' + mtag : ''}${t.effort ? ' · effort:' + esc(t.effort) : ''}${t.serviceTier ? ' · ' + esc(t.serviceTier) : ''}</div>
       ${nested ? '' : lineageLine(t)}
       <div class="promptmini" data-tip-id="${t.id}">${esc(promptLine)}</div>
       <div class="chartwrap">${consumptionChart(t.tokenSeries, open ? 230 : (nested ? 92 : 140))}</div>
@@ -836,14 +910,17 @@ function renderHistory() {
         : t.prompt ? short(t.prompt.replace(/\s+/g, ' '), 60) : t.id.slice(0, 8));
       const kd = t.isSubagent ? (t.agentKind || 'subagent') : 'main';
       const kind = kd + (t.agentNickname ? ' · ' + esc(t.agentNickname) : '');
-      const models = [t.model, t.effort ? 'effort:' + t.effort : null, t.autoReview ? '+review' : null].filter(Boolean).join(' ');
+      const rest = [t.effort ? 'effort:' + t.effort : null, t.autoReview ? '+review' : null].filter(Boolean).join(' ');
+      const models = t.model
+        ? `${modelMark(t.model, t.source)}<span style="color:${modelStyle(t.model, t.source).color}">${esc(t.model)}</span>${rest ? ' ' + esc(rest) : ''}`
+        : (esc(rest) || '–');
       const par = t.parent && (t.parent.title || t.parent.id);
       return `<tr onclick="openDetail('${t.id}')" style="cursor:pointer">
         <td class="num">${dateHM(t.startedAt)}</td>
         <td>${esc(name)}${par ? `<div class="lineage" style="padding:0" onclick="openDetail('${t.parent.id}');event.stopPropagation()">↳ ${esc(short(t.parent.title || t.parent.id, 40))}</div>` : ''}</td>
         <td style="max-width:280px;color:var(--dim)">${esc(short(t.prompt, 100))}</td>
         <td>${esc(t.repo || t.project || '')}${t.branch ? ' @ ' + esc(t.branch) : ''}</td>
-        <td>${esc(models || '–')}</td>
+        <td>${models}</td>
         <td>${srcBadge(t.source)}</td>
         <td>${kind}</td>
         <td class="num">${fmt(t.tokens)}${t.compactions ? ' ⤺' : ''}</td>
@@ -890,7 +967,7 @@ async function openDetail(id) {
     <dl class="kv">
       <dt>project</dt><dd>${esc(s.cwd || '–')}</dd>
       <dt>git</dt><dd>${s.git ? esc((s.git.repo || '') + ' @ ' + s.git.branch + ' (' + s.git.commit + ')') : '–'}</dd>
-      <dt>model</dt><dd>${esc(s.primaryModel || '–')}${s.autoReview ? ' + auto-review' : ''}</dd>
+      <dt>model</dt><dd>${s.primaryModel ? modelBadge(s.primaryModel, s.source) : '–'}${s.autoReview ? ' + auto-review' : ''}</dd>
       <dt>effort / tier</dt><dd>${esc(s.effort || '–')} / ${esc(s.serviceTier || '–')}</dd>
       <dt>client</dt><dd>${esc(s.originator || '–')} · ${esc(s.cliVersion || '')}</dd>
       <dt>kind</dt><dd>${s.isSubagent ? (esc(s.agentKind || 'subagent') + (s.depth ? ' · depth ' + s.depth : '')) : 'main'}</dd>
