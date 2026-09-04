@@ -581,6 +581,127 @@ function trends(period, includeSub, model, effort, source) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Agents — the same spend cut by *who* spent it, so agent types can be compared
+// on efficiency rather than just volume.
+// ---------------------------------------------------------------------------
+// Commands grouped into what they are for: "reading costs me 40% of my tool
+// budget" is actionable in a way that a list of forty binaries is not.
+const CMD_CLASS = [
+  ['poll', ['write_stdin', 'wait', 'wait_agent', 'exec_command', 'sleep']],
+  ['read', ['cat', 'sed', 'head', 'tail', 'rg', 'grep', 'find', 'ls', 'less', 'awk', 'wc', 'jq',
+    'Read', 'Grep', 'Glob', 'NotebookRead']],
+  ['edit', ['apply_patch', 'patch', 'tee', 'Edit', 'Write', 'NotebookEdit', 'MultiEdit']],
+  ['vcs', ['git', 'gh', 'rtk']],
+  ['build', ['pnpm', 'npm', 'yarn', 'node', 'python', 'python3', 'pytest', 'cargo', 'go', 'make',
+    'tsc', 'eslint', 'ruff', 'bash', 'sh', 'timeout', 'export']],
+  ['net', ['curl', 'wget', 'ssh', 'scp', 'WebFetch', 'WebSearch']],
+  ['agent', ['Task', 'Agent', 'SendMessage', 'Skill']],
+];
+const CLASS_OF = new Map();
+for (const [cls, bases] of CMD_CLASS) for (const b of bases) CLASS_OF.set(b, cls);
+const classOf = (base) => CLASS_OF.get(String(base).split(' ')[0]) || 'other';
+
+// role = what this agent was doing, not which model ran it
+function roleOf(r) {
+  if (r.autoReview || r.agentKind === 'guardian') return 'guardian';
+  if (r.isSubagent) return r.agentKind || 'subagent';
+  return 'main';
+}
+// auto-review sessions report no model of their own — they are Codex's reviewer
+const modelOf = (r) => r.model || (r.autoReview || r.agentKind === 'guardian' ? 'codex-auto-review' : '?');
+const AGENT_KEYS = {
+  agent: (r) => `${r.source}·${roleOf(r)}·${modelOf(r)}`,
+  role: (r) => `${r.source}·${roleOf(r)}`,
+  model: (r) => modelOf(r),
+  effort: (r) => `${modelOf(r)} · effort:${r.effort || '–'}`,
+  project: (r) => r.project || '–',
+};
+
+function agents(sinceMs, includeSub, source, groupBy) {
+  const cutoff = sinceMs ? Date.now() - sinceMs : 0;
+  const recs = pickSessions(includeSub, '', '', source).filter((r) =>
+    !cutoff || new Date(r.startedAt).getTime() >= cutoff);
+  const keyOf = AGENT_KEYS[groupBy] || AGENT_KEYS.agent;
+
+  const groups = new Map();
+  const blank = (key, r) => ({
+    key,
+    source: r.source, role: roleOf(r), model: modelOf(r), effort: r.effort || null,
+    sessions: 0, tokens: 0, input: 0, cached: 0, output: 0, reasoning: 0,
+    commands: 0, outTokens: 0, truncated: 0, dupeRuns: 0, dupeTokens: 0,
+    compactions: 0, lastSeen: null,
+    _bases: new Map(), classes: {},
+  });
+
+  for (const r of recs) {
+    const key = keyOf(r);
+    const g = groups.get(key) || groups.set(key, blank(key, r)).get(key);
+    g.sessions++;
+    g.tokens += r.totals.billed || r.totals.total || 0;
+    g.input += r.totals.input || 0;
+    g.cached += r.totals.cached || 0;
+    g.output += r.totals.output || 0;
+    g.reasoning += r.totals.reasoning || 0;
+    g.commands += r.toolCalls || 0;
+    g.outTokens += r.outTokens || 0;
+    g.compactions += r.compactions || 0;
+    if (!g.lastSeen || r.startedAt > g.lastSeen) g.lastSeen = r.startedAt;
+    if (g.model && g.model !== modelOf(r)) g.model = null;               // mixed
+    if (g.effort && r.effort && g.effort !== r.effort) g.effort = null;
+    if (g.role !== roleOf(r)) g.role = null;
+
+    for (const c of r.cmds || []) {
+      const e = g._bases.get(c.base) || (g._bases.set(c.base,
+        { base: c.base, cls: classOf(c.base), tokens: 0, calls: 0, out: 0, truncated: 0 }).get(c.base));
+      e.tokens += c.tokens; e.calls += c.count;
+    }
+    for (const [base, ob] of Object.entries(r.outByBase || {})) {
+      const e = g._bases.get(base) || (g._bases.set(base,
+        { base, cls: classOf(base), tokens: 0, calls: 0, out: 0, truncated: 0 }).get(base));
+      e.out += ob.tokens; e.truncated += ob.truncated;
+      if (!e.calls) e.calls += ob.calls;
+      g.truncated += ob.truncated;
+    }
+    for (const d of r.dupes || []) {
+      g.dupeRuns += d.count - 1;
+      g.dupeTokens += Math.round(d.tokens * (d.count - 1) / d.count);
+    }
+  }
+
+  const out = [...groups.values()].map((g) => {
+    const bases = [...g._bases.values()].sort((a, b) => (b.tokens + b.out) - (a.tokens + a.out));
+    const classes = {};
+    for (const b of bases) {
+      const c = classes[b.cls] || (classes[b.cls] = { cls: b.cls, tokens: 0, out: 0, calls: 0 });
+      c.tokens += b.tokens; c.out += b.out; c.calls += b.calls;
+    }
+    delete g._bases;
+    const ctxIn = g.input + g.cached;
+    return {
+      ...g,
+      classes: Object.values(classes).sort((a, b) => (b.tokens + b.out) - (a.tokens + a.out)),
+      topBases: bases.slice(0, 12),
+      perSession: g.sessions ? Math.round(g.tokens / g.sessions) : 0,
+      perCommand: g.commands ? Math.round(g.tokens / g.commands) : 0,
+      cacheRate: ctxIn ? g.cached / ctxIn : null,
+      reasonShare: g.output ? g.reasoning / g.output : null,
+      outShare: g.tokens ? g.outTokens / g.tokens : null,
+      truncRate: g.commands ? g.truncated / g.commands : null,
+      dupeShare: g.outTokens ? g.dupeTokens / g.outTokens : null,
+    };
+  }).sort((a, b) => b.tokens - a.tokens);
+
+  const grand = out.reduce((a, g) => {
+    a.tokens += g.tokens; a.sessions += g.sessions; a.commands += g.commands;
+    a.outTokens += g.outTokens; a.dupeTokens += g.dupeTokens;
+    a.cached += g.cached; a.input += g.input; a.reasoning += g.reasoning; a.output += g.output;
+    return a;
+  }, { tokens: 0, sessions: 0, commands: 0, outTokens: 0, dupeTokens: 0, cached: 0, input: 0, reasoning: 0, output: 0 });
+
+  return { groupBy, groups: out, grand, classes: CMD_CLASS.map(([c]) => c).concat('other') };
+}
+
 // "Where are the tokens going, and what looks wasteful?"
 function economy(sinceMs, includeSub, model, effort, source) {
   const cutoff = sinceMs ? Date.now() - sinceMs : 0;
@@ -850,6 +971,16 @@ const server = http.createServer((req, res) => {
     const includeSub = q.get('subagents') !== '0';   // default: include
     if (!rollupReady) return json(res, 200, { building: true, progress: buildProgress });
     return json(res, 200, economy(sinceMs, includeSub, q.get('model') || '', q.get('effort') || '', q.get('source') || ''));
+  }
+
+  if (pathn === '/api/agents') {
+    ensureRollups();
+    const q = url.searchParams;
+    const sinceMs = q.get('range') === '7d' ? 7 * 864e5 : q.get('range') === '30d' ? 30 * 864e5 : 0;
+    const includeSub = q.get('subagents') !== '0';
+    const groupBy = ['agent', 'role', 'model', 'effort', 'project'].includes(q.get('by')) ? q.get('by') : 'agent';
+    if (!rollupReady) return json(res, 200, { building: true, progress: buildProgress });
+    return json(res, 200, agents(sinceMs, includeSub, q.get('source') || '', groupBy));
   }
 
   if (pathn === '/api/command') {

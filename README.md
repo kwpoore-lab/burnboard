@@ -64,7 +64,7 @@ It reads the flat `projects/<project-slug>/<session-id>.jsonl` transcripts under
 
 ## What it shows
 
-Four tabs: **Running now**, **History**, **Trends**, **Economy**.
+Five tabs: **Running now**, **History**, **Trends**, **Agents**, **Economy**.
 
 ### Prompts running now
 
@@ -126,6 +126,27 @@ subagents). Shows grand totals, a tokens-per-bucket bar chart, and two independe
 - **By prompt** — the same, keyed by each session's opening prompt (near-duplicates merged).
 
 Each list has a filter box.
+
+### Agents
+
+The same spend cut by *who* spent it, so agent types can be compared on efficiency
+rather than volume. One row per group — regroup with the toggle: **agent type**
+(source · role · model), **role**, **model**, **effort** or **project**.
+
+Per group: sessions, billed tokens and share, tokens per session, commands, tokens
+per command, cache hit rate, reasoning share of model output, tool-output share,
+truncation rate, and tokens burned re-running identical commands. Rates are shown
+only where there is enough of them to mean something.
+
+Expand a row for:
+
+- **What its commands are for** — every base command mapped to a class
+  (poll · read · edit · vcs · build · net · agent · other) and stacked into one bar,
+  so "reading costs 35% of my tool budget" is legible at a glance
+- **Costliest commands** — calls, Δ tokens, output tokens fed back into context,
+  truncation count; click any command to open its trend
+- **Reading of this agent type** — the numbers in plain language: what it spends on,
+  whether the cache is working, clipped output, repeat-run waste, compactions
 
 ### Economy
 
@@ -192,6 +213,7 @@ is source-agnostic and simply carries a `source` tag through to the UI.
 | `GET /api/sessions?date=YYYY-MM-DD` | full session summaries for one day |
 | `GET /api/session/:uuid` | full timeline + summary |
 | `GET /api/trends?period=day\|week\|month&subagents=0\|1&source=codex\|claude` | aggregated rollups (`{building:true}` while first scan runs) |
+| `GET /api/agents?range=all\|30d\|7d&by=agent\|role\|model\|effort\|project` | per-agent-type spend, efficiency rates and command-class mix |
 | `GET /api/economy?range=all\|30d\|7d&subagents=0\|1&source=codex\|claude` | token-economy signals from the same rollups |
 
 Every session record carries `source` (`"codex"` or `"claude"`). The aggregate endpoints accept

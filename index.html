@@ -166,6 +166,21 @@
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; }
   .tgrand b { color: var(--fg); }
   .tcols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px; }
+  /* agents tab */
+  .agname { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+  .agname .sub { color: var(--dim); font-weight: 400; font: 11px var(--mono); }
+  .agrow { cursor: pointer; }
+  .agrow:hover td { background: var(--panel); }
+  .share { height: 4px; background: var(--panel2); border-radius: 2px; overflow: hidden; margin-top: 4px; }
+  .share > i { display: block; height: 100%; background: var(--accent); opacity: .75; }
+  .mix { display: flex; height: 14px; border-radius: 3px; overflow: hidden; background: var(--panel2); }
+  .mix > i { display: block; height: 100%; }
+  .mixkey { display: flex; gap: 12px; flex-wrap: wrap; font: 10.5px/1.6 var(--mono); color: var(--dim); margin-top: 5px; }
+  .mixkey span { display: inline-flex; align-items: center; gap: 4px; }
+  .mixkey i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+  .agdetail td { background: var(--panel2); }
+  .warn { color: var(--yellow); }
+  .good { color: var(--green); }
   @media (max-width: 1000px) { .tcols { grid-template-columns: 1fr; } }
   .tfilter { width: 100%; margin: 4px 0 8px; }
   .trow-detail td { background: var(--panel2); }
@@ -233,6 +248,7 @@
     <a href="#running" data-tab="running" class="on">Prompts running now</a>
     <a href="#history" data-tab="history">History</a>
     <a href="#trends" data-tab="trends">Trends</a>
+    <a href="#agents" data-tab="agents">Agents</a>
     <a href="#economy" data-tab="economy">Economy</a>
   </nav>
   <span class="seg" id="srcSeg" title="which agent's sessions to show">
@@ -287,6 +303,22 @@
       </span>
     </h2>
     <div id="trends"><div class="empty">Loading…</div></div>
+  </section>
+
+  <section id="tab-agents" hidden>
+    <h2>Agents — who is spending it, and on what
+      <span style="float:right;font-weight:400;text-transform:none;letter-spacing:0">
+        <span class="seg" id="agRange">
+          <button data-r="all" class="on">All time</button><button data-r="30d">30 days</button><button data-r="7d">7 days</button>
+        </span>
+        <span class="seg" id="agBy" style="margin-left:10px">
+          <button data-b="agent" class="on">Agent type</button><button data-b="role">Role</button><button data-b="model">Model</button><button data-b="effort">Effort</button><button data-b="project">Project</button>
+        </span>
+        <label style="margin-left:12px;font-size:12px;color:var(--dim)">
+          <input type="checkbox" id="agSub" checked> subagents</label>
+      </span>
+    </h2>
+    <div id="agents"><div class="empty">Loading…</div></div>
   </section>
 
   <section id="tab-economy" hidden>
@@ -1536,6 +1568,212 @@ document.addEventListener('click', (e) => {
   if (el) { e.stopPropagation(); openCommand(el.dataset.cmd); }
 });
 
+// ---------------------------------------------------------------------------
+// Agents — spend cut by who spent it
+// ---------------------------------------------------------------------------
+let agData = null, agRange = 'all', agBy = 'agent', agSub = true, agPoll = null;
+const agOpen = new Set();
+
+const CLASS_COLOR = {
+  poll: '#f0a13a', read: '#7aa2f7', edit: '#3fb950', vcs: '#bc8cff',
+  build: '#2dd4bf', net: '#e0687e', agent: '#c9a2f7', other: '#5a6673',
+};
+const CLASS_HINT = {
+  poll: 'waiting on a running process (write_stdin / wait / exec_command)',
+  read: 'reading files and searching (cat, sed, rg, grep, Read, Grep…)',
+  edit: 'changing files (apply_patch, Edit, Write…)',
+  vcs: 'version control and repo tooling (git, gh, rtk)',
+  build: 'running builds, tests and scripts (pnpm, node, pytest…)',
+  net: 'network calls (curl, gh api, WebFetch…)',
+  agent: 'spawning or talking to other agents',
+  other: 'everything else',
+};
+
+async function loadAgents() {
+  const el = $('#agents');
+  const r = await fetch(`/api/agents?range=${agRange}&by=${agBy}&subagents=${agSub ? 1 : 0}`
+    + (srcFilter ? `&source=${encodeURIComponent(srcFilter)}` : '')).then(x => x.json());
+  if (r.building) {
+    const p = r.progress || {};
+    el.innerHTML = `<div class="empty">Building rollup cache… ${p.done || 0} / ${p.total || '?'} sessions</div>`;
+    clearTimeout(agPoll); agPoll = setTimeout(loadAgents, 1500);
+    return;
+  }
+  agData = r;
+  renderAgents();
+}
+
+const pct = (v, digits = 0) => v == null ? '–' : (v * 100).toFixed(digits) + '%';
+// tokens-per-command only means something when commands are how this agent
+// actually spends — a reviewer with 11 calls across 223 sessions is not that
+const perCmdOk = (g) => g.commands >= 20 && g.commands >= g.sessions;
+// a rate is only meaningful once there is enough of it to mean anything
+const rateCell = (v, n, min, cls) => (v == null || n < min) ? '<td class="num">–</td>'
+  : `<td class="num${cls ? ' ' + cls(v) : ''}">${pct(v)}</td>`;
+
+function agLabel(g) {
+  if (agData.groupBy === 'model') return modelBadge(g.model || g.key, g.source) || esc(g.key);
+  if (agData.groupBy === 'project') return esc(g.key);
+  const marks = g.source ? (SRC_MARK[g.source] || '') : '';
+  const role = g.role || 'mixed';
+  const model = g.model ? ` <span class="sub">${esc(g.model)}</span>` : '';
+  const effort = agData.groupBy === 'effort' && g.effort ? ` <span class="sub">effort:${esc(g.effort)}</span>` : '';
+  return `${marks}${esc(role)}${model}${effort}`;
+}
+
+// classes stacked into one bar — the shape of what this agent type spends on
+function classMix(g) {
+  const tot = g.classes.reduce((a, c) => a + c.tokens + c.out, 0);
+  if (!tot) return '<span class="empty">no tool calls</span>';
+  const seg = g.classes.map(c => {
+    const v = c.tokens + c.out;
+    return `<i style="width:${(v / tot * 100).toFixed(2)}%;background:${CLASS_COLOR[c.cls] || CLASS_COLOR.other}"
+      title="${esc(c.cls)} — ${fmt(Math.round(v))} tokens over ${fmt(c.calls)} calls · ${esc(CLASS_HINT[c.cls] || '')}"></i>`;
+  }).join('');
+  const key = g.classes.slice(0, 6).map(c =>
+    `<span><i style="background:${CLASS_COLOR[c.cls] || CLASS_COLOR.other}"></i>${esc(c.cls)} ${
+      ((c.tokens + c.out) / tot * 100).toFixed(0)}%</span>`).join('');
+  return `<div class="mix">${seg}</div><div class="mixkey">${key}</div>`;
+}
+
+function renderAgents() {
+  const d = agData, G = d.grand;
+  if (!d.groups.length) { $('#agents').innerHTML = '<div class="empty">No sessions in this range.</div>'; return; }
+  const max = d.groups[0].tokens || 1;
+  const cacheAll = (G.input + G.cached) ? G.cached / (G.input + G.cached) : null;
+
+  const rows = d.groups.map(g => {
+    const open = agOpen.has(g.key);
+    const main = `<tr class="agrow" onclick="toggleAgent('${attr(g.key)}')">
+      <td>
+        <div class="agname"><span class="caret" style="${open ? 'transform:rotate(90deg)' : ''}">▸</span>${agLabel(g)}</div>
+        <div class="share"><i style="width:${(g.tokens / max * 100).toFixed(1)}%"></i></div>
+      </td>
+      <td class="num">${fmt(g.sessions)}</td>
+      <td class="num">${kfmt(g.tokens)}</td>
+      <td class="num">${G.tokens ? pct(g.tokens / G.tokens) : '–'}</td>
+      <td class="num">${kfmt(g.perSession)}</td>
+      <td class="num">${fmt(g.commands)}</td>
+      <td class="num"${perCmdOk(g) ? '' : ' title="too few commands to average — see the Cmds column"'}>${
+        perCmdOk(g) ? kfmt(g.perCommand) : '–'}</td>
+      ${rateCell(g.cacheRate, g.sessions, 1, v => v >= 0.8 ? 'good' : v < 0.5 ? 'warn' : '')}
+      ${rateCell(g.reasonShare, g.sessions, 1)}
+      ${rateCell(g.outShare, g.commands, 5)}
+      ${rateCell(g.truncRate, g.commands, 20, v => v > 0.05 ? 'warn' : '')}
+      <td class="num">${g.dupeTokens ? kfmt(g.dupeTokens) : '·'}</td>
+    </tr>`;
+    if (!open) return main;
+    const bases = g.topBases.filter(b => b.tokens || b.out);
+    return main + `<tr class="agdetail"><td colspan="12">
+      <p class="subh">What its commands are for</p>
+      ${classMix(g)}
+      <div class="tcols" style="margin-top:12px">
+        <div>
+          <p class="subh">Costliest commands</p>
+          <table><thead><tr><th>Command</th><th class="num">Calls</th>
+            <th class="num" title="billed tokens attributed to this command">Δ tokens</th>
+            <th class="num" title="tokens of output this command fed back into context">Output</th>
+            <th class="num">Trunc</th></tr></thead>
+            <tbody>${bases.length ? bases.map(b => `<tr>
+              <td class="base"><span class="cmdlink" data-cmd="${esc(b.base)}">${esc(b.base)}</span>
+                <span class="sub"> ${esc(b.cls)}</span></td>
+              <td class="num">${fmt(b.calls)}</td>
+              <td class="num">${kfmt(b.tokens)}</td>
+              <td class="num">${kfmt(b.out)}</td>
+              <td class="num">${b.truncated || '·'}</td></tr>`).join('')
+              : '<tr><td colspan="5" class="empty">This agent runs no commands.</td></tr>'}
+            </tbody></table>
+        </div>
+        <div>
+          <p class="subh">Reading of this agent type</p>
+          <div class="statline" style="display:block">
+            ${agNotes(g, G).map(n => `<div>${n}</div>`).join('')}
+          </div>
+        </div>
+      </div>
+    </td></tr>`;
+  }).join('');
+
+  $('#agents').innerHTML = `
+    <div class="tgrand">
+      <span><b>${fmt(G.tokens)}</b> billed tokens</span>
+      <span><b>${fmt(G.sessions)}</b> sessions</span>
+      <span><b>${fmt(G.commands)}</b> commands</span>
+      <span title="tool output read back into the model's context"><b>${kfmt(G.outTokens)}</b> tool output</span>
+      <span title="output tokens spent re-running commands that had already been run unchanged"><b>${kfmt(G.dupeTokens)}</b> repeat-run waste</span>
+      <span title="cached input over all input — the share of context served from cache"><b>${pct(cacheAll)}</b> cached</span>
+      <span style="margin-left:auto">${d.groups.length} ${esc(d.groupBy)} groups</span>
+    </div>
+    <table><thead><tr>
+      <th>${esc(d.groupBy === 'project' ? 'Project' : d.groupBy === 'model' ? 'Model' : 'Agent')}</th>
+      <th class="num">Sessions</th>
+      <th class="num">Billed</th>
+      <th class="num">Share</th>
+      <th class="num" title="billed tokens per session">Per session</th>
+      <th class="num">Cmds</th>
+      <th class="num" title="billed tokens per command — how expensive one step is for this agent">Per cmd</th>
+      <th class="num" title="share of input tokens served from cache — higher is cheaper">Cached</th>
+      <th class="num" title="reasoning tokens as a share of model output">Reasoning</th>
+      <th class="num" title="tool output tokens as a share of everything this agent was billed">Tool out</th>
+      <th class="num" title="share of commands whose output was clipped — paying for an answer you did not get">Trunc</th>
+      <th class="num" title="output tokens spent re-running identical commands">Repeat waste</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// plain-language reading of the numbers — the point of the tab
+function agNotes(g, G) {
+  const out = [];
+  const top = g.classes[0];
+  const tot = g.classes.reduce((a, c) => a + c.tokens + c.out, 0);
+  if (top && tot) {
+    out.push(`Spends most of its tool budget on <b>${esc(top.cls)}</b> — ${
+      pct((top.tokens + top.out) / tot)} of it. ${esc(CLASS_HINT[top.cls] || '')}`);
+  } else {
+    out.push('Runs no commands at all — every token is prompt and reply.');
+  }
+  if (g.cacheRate != null) {
+    out.push(g.cacheRate >= 0.8
+      ? `Cache is doing its job: <b class="good">${pct(g.cacheRate)}</b> of its context is served from cache.`
+      : `Only <b class="warn">${pct(g.cacheRate)}</b> of its context comes from cache — ${
+        g.cacheRate < 0.5 ? 'each request is re-sending most of the conversation.' : 'there is headroom here.'}`);
+  }
+  if (g.commands >= 20 && g.truncRate > 0.03) {
+    out.push(`<b class="warn">${pct(g.truncRate)}</b> of its commands had their output clipped — it paid for those tokens and still had to re-run or guess.`);
+  }
+  if (g.dupeTokens > 50000) {
+    out.push(`<b>${kfmt(g.dupeTokens)}</b> tokens went into re-running commands that had already been run unchanged.`);
+  }
+  if (g.compactions) {
+    out.push(`Compacted context <b>${fmt(g.compactions)}×</b> — long sessions that outgrew the window.`);
+  }
+  if (g.commands) {
+    out.push(perCmdOk(g)
+      ? `One command costs it <b>${kfmt(g.perCommand)}</b> billed tokens on average, over ${fmt(g.commands)} commands.`
+      : `Only ${fmt(g.commands)} commands across ${fmt(g.sessions)} sessions — this agent barely touches tools.`);
+  }
+  if (G.tokens && g.tokens / G.tokens > 0.25) {
+    out.push(`This one group is <b>${pct(g.tokens / G.tokens)}</b> of everything in range.`);
+  }
+  return out;
+}
+
+function toggleAgent(key) {
+  if (agOpen.has(key)) agOpen.delete(key); else agOpen.add(key);
+  renderAgents();
+}
+
+$('#agRange').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  [...$('#agRange').children].forEach(x => x.classList.toggle('on', x === b));
+  agRange = b.dataset.r; loadAgents();
+});
+$('#agBy').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  [...$('#agBy').children].forEach(x => x.classList.toggle('on', x === b));
+  agBy = b.dataset.b; agOpen.clear(); loadAgents();
+});
+$('#agSub').addEventListener('change', (e) => { agSub = e.target.checked; loadAgents(); });
+
 async function loadEconomy() {
   const el = $('#economy');
   const r = await fetch(`/api/economy?range=${ecoRange}&subagents=${ecoSub ? 1 : 0}${facetQS(ecoModel, ecoEffort)}`).then(x => x.json());
@@ -1663,7 +1901,7 @@ $('#ecoEffort').addEventListener('change', (e) => { ecoEffort = e.target.value; 
 // tabs
 // ---------------------------------------------------------------------------
 let curTab = 'running';
-const TABS = ['running', 'history', 'trends', 'economy'];
+const TABS = ['running', 'history', 'trends', 'agents', 'economy'];
 function showTab(name) {
   if (!TABS.includes(name)) name = 'running';
   curTab = name;
@@ -1671,6 +1909,7 @@ function showTab(name) {
   [...$('#tabs').children].forEach(a => a.classList.toggle('on', a.dataset.tab === name));
   if (name === 'history' && !histAll.length) loadHistory();
   if (name === 'trends' && !trendData) loadTrends();
+  if (name === 'agents' && !agData) loadAgents();
   if (name === 'economy' && !ecoData) loadEconomy();
 }
 window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
@@ -1685,6 +1924,7 @@ $('#srcSeg').addEventListener('click', (e) => {
   if (lastSnap) render(lastSnap);
   if (histAll.length) renderHistory();
   if (curTab === 'trends') loadTrends();
+  if (curTab === 'agents') loadAgents();
   if (curTab === 'economy') loadEconomy();
   trendData = null; ecoData = null;   // force a refetch when those tabs open
 });
