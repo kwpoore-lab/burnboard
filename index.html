@@ -541,7 +541,9 @@ function lineageLine(t) {
 function focusBlock(t, depth) {
   const nested = depth > 0;
   const name = t.title || (t.agentNickname ? 'agent ' + t.agentNickname
-    : t.agentKind ? t.agentKind : t.id.slice(0, 8));
+    : t.agentKind ? t.agentKind
+    : t.firstUserText ? short(t.firstUserText.replace(/\s+/g, ' '), 60)
+    : t.id.slice(0, 8));
   const badges = [];
   badges.push(srcBadge(t.source));
   if (t.primaryModel) badges.push(`<span class="badge model">${esc(t.primaryModel)}</span>`);
@@ -830,7 +832,8 @@ function renderHistory() {
     </div>
     <table><thead><tr>${th}</tr></thead><tbody>
     ${rows.map(t => {
-      const name = t.title || (t.agentNickname ? 'agent ' + t.agentNickname : t.id.slice(0, 8));
+      const name = t.title || (t.agentNickname ? 'agent ' + t.agentNickname
+        : t.prompt ? short(t.prompt.replace(/\s+/g, ' '), 60) : t.id.slice(0, 8));
       const kd = t.isSubagent ? (t.agentKind || 'subagent') : 'main';
       const kind = kd + (t.agentNickname ? ' · ' + esc(t.agentNickname) : '');
       const models = [t.model, t.effort ? 'effort:' + t.effort : null, t.autoReview ? '+review' : null].filter(Boolean).join(' ');

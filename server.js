@@ -153,7 +153,9 @@ function sessionLabel(id) {
   const rec = rollupCache && rollupCache.sessions.get(id);
   const ent = [...cache.values()].find((e) => e.summary && e.summary.id === id);
   const src = SOURCE_BY_ID.get((rec && rec.source) || (ent && ent.summary.source));
-  if (src) { const t = src.titleFor(id); if (t) out.title = t; }
+  if (rec && rec.title) out.title = rec.title;
+  if (ent && !out.title && ent.summary.threadTitle) out.title = ent.summary.threadTitle;
+  if (!out.title && src) { const t = src.titleFor(id); if (t) out.title = t; }
   if (rec) {
     if (!out.title && rec.prompt) out.title = rec.prompt.slice(0, 80);
     out.kind = rec.agentKind || (rec.isSubagent ? 'subagent' : 'main');
@@ -192,7 +194,7 @@ function decorate(sum, full) {
     id: sum.id,
     source: sum.source,
     sourceLabel: src ? src.label : sum.source,
-    title: (src && src.titleFor(sum.id)) || null,
+    title: sum.threadTitle || (src && src.titleFor(sum.id)) || null,
     parentId: sum.parentId,
     isSubagent: sum.isSubagent,
     depth: sum.depth,
@@ -315,7 +317,7 @@ let building = false;
 let rollupReady = false;
 let buildProgress = { done: 0, total: 0 };
 
-const ROLLUP_VERSION = 16;   // bump to force a full re-scan when the parser changes
+const ROLLUP_VERSION = 17;   // bump to force a full re-scan when the parser changes
 function loadRollupCache() {
   try {
     const j = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
@@ -694,7 +696,7 @@ const server = http.createServer((req, res) => {
         id: r.id,
         source: r.source,
         startedAt: r.startedAt,
-        title: (SOURCE_BY_ID.get(r.source) || {}).titleFor ? SOURCE_BY_ID.get(r.source).titleFor(r.id) : null,
+        title: r.title || ((SOURCE_BY_ID.get(r.source) || {}).titleFor ? SOURCE_BY_ID.get(r.source).titleFor(r.id) : null),
         prompt: r.prompt,
         project: r.project,
         repo: r.repo, branch: r.branch,
