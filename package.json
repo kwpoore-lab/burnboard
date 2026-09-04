@@ -1,11 +1,13 @@
 {
-  "name": "codexmon",
+  "name": "burnboard",
   "version": "0.1.0",
-  "description": "Live and historical monitor for OpenAI Codex CLI usage — reads ~/.codex/sessions and shows running agents, token consumption over time, per-command/per-prompt trends, a token-economy audit, and subagent lineage.",
+  "description": "Live and historical monitor for AI coding agent usage — reads OpenAI Codex CLI (~/.codex/sessions) and Claude Code (~/.claude/projects) session transcripts and shows running agents, token consumption over time, per-command/per-prompt trends, a token-economy audit, and subagent lineage.",
   "keywords": [
     "codex",
     "openai-codex",
     "codex-cli",
+    "claude-code",
+    "anthropic",
     "monitor",
     "dashboard",
     "observability",
@@ -14,16 +16,16 @@
     "agents",
     "cli"
   ],
-  "homepage": "https://github.com/kwpoore-lab/codexmon#readme",
-  "bugs": "https://github.com/kwpoore-lab/codexmon/issues",
+  "homepage": "https://github.com/kwpoore-lab/burnboard#readme",
+  "bugs": "https://github.com/kwpoore-lab/burnboard/issues",
   "repository": {
     "type": "git",
-    "url": "https://github.com/kwpoore-lab/codexmon.git"
+    "url": "https://github.com/kwpoore-lab/burnboard.git"
   },
   "author": "Ken Poore",
   "license": "MIT",
   "bin": {
-    "codexmon": "server.js"
+    "burnboard": "server.js"
   },
   "main": "server.js",
   "scripts": {
@@ -31,6 +33,7 @@
   },
   "files": [
     "server.js",
+    "lib",
     "index.html",
     "README.md",
     "LICENSE"

@@ -1,10 +1,15 @@
-# codexmon
+# burnboard
 
-**A live and historical monitor for [OpenAI Codex CLI](https://github.com/openai/codex) usage.**
+**A live and historical monitor for AI coding agent usage — [OpenAI Codex CLI](https://github.com/openai/codex)
+and [Claude Code](https://claude.com/claude-code), side by side.**
 
-codexmon tails the JSONL session logs Codex writes to `~/.codex/sessions/` and turns them into a
-local web dashboard — no account access, no API keys, nothing to send anywhere. It runs from a
-single zero-dependency Node script.
+burnboard tails the JSONL session transcripts both tools write locally — Codex to
+`~/.codex/sessions/`, Claude Code to `~/.claude/projects/` — and turns them into a local web
+dashboard. No account access, no API keys, nothing sent anywhere. Zero dependencies, Node stdlib
+only.
+
+Every view carries an **All agents / Codex / Claude Code** toggle: see one tool in isolation, or
+both together in a single combined view with each session badged by which agent ran it.
 
 - **Prompts running now** — one live panel per active agent, refreshed every ~2s, with a
   billed-token consumption chart, the current command history, per-command token deltas, and a
@@ -18,33 +23,44 @@ single zero-dependency Node script.
 - **Economy** — a token-waste audit: which commands dump the most output back into context,
   truncation hits, polling/wait round-trips, and commands re-run unchanged.
 
-It also corrects for Codex quirks the raw numbers don't show — the token counter resetting on
-context compaction, `total_token_usage` under-counting long sessions, UTC timestamps, and JS-wrapped
-tool calls.
+It also corrects for quirks the raw numbers don't show — Codex's token counter resetting on
+context compaction, `total_token_usage` under-counting long sessions, UTC timestamps, JS-wrapped
+tool calls, and (on both sides) separating a request's genuinely *new* tokens from the cached
+context resent on every turn.
 
 ## Run
 
 Requires Node ≥ 18. No dependencies, nothing to install.
 
 ```bash
-git clone https://github.com/kwpoore-lab/codexmon
-cd codexmon
+git clone https://github.com/kwpoore-lab/burnboard
+cd burnboard
 node server.js            # -> http://localhost:4317
 ```
 
-Options: `--port 8080`, `--root /path/to/.codex`.
+Options: `--port 8080`, `--root /path/to/.codex`, `--claude-root /path/to/.claude`.
 
-### Finding your Codex data
+### Finding your data
 
-On startup codexmon locates your Codex home automatically, in this order:
+On startup burnboard locates each agent's home directory and prints what it found. Either source
+can be absent — it just shows whichever it finds.
+
+**Codex CLI**, in this order:
 
 1. `--root <dir>`
 2. `$CODEX_HOME` (the same variable Codex itself honours)
 3. `$XDG_CONFIG_HOME/codex`
 4. `~/.codex`, then `~/.config/codex`, then the OS app-support dir
 
-It picks the first one containing a `sessions/` directory and prints which it used.
-If it can't find one, set `CODEX_HOME` or pass `--root`.
+It picks the first one containing a `sessions/` directory.
+
+**Claude Code**, in this order:
+
+1. `--claude-root <dir>`
+2. `$CLAUDE_HOME`
+3. `~/.claude`
+
+It reads the flat `projects/<project-slug>/<session-id>.jsonl` transcripts underneath.
 
 ## What it shows
 
@@ -81,7 +97,7 @@ breakdown (total / ctx window / in / cached / out / reasoning), and two tables �
 
 **Billed tokens vs. the raw counter.** Codex's `total_token_usage` is per-context-window: it
 drops back to ~0 whenever the conversation is compacted, so a long session's raw counter
-sawtooths and *undercounts* the total. codexmon instead tracks its own monotonic running sum of
+sawtooths and *undercounts* the total. burnboard instead tracks its own monotonic running sum of
 per-request tokens (`last_token_usage`) — that's the "billed tokens" figure and the consumption
 chart's line. Compaction points are marked on the chart with a dashed rule.
 
@@ -138,6 +154,11 @@ incrementally after.
 
 ## How it works
 
+Each agent gets its own ingestion module under `lib/sources/` (`codex.js`, `claude.js`) that
+knows how to find that tool's session files and parse its line schema. Both emit the same
+normalized record shape, so everything downstream — live snapshots, rollups, trends, economy —
+is source-agnostic and simply carries a `source` tag through to the UI.
+
 - Incremental tail-read: each file is parsed once, then only newly-appended bytes on each tick
   (the active session file is already >10 MB).
 - `source` in `session_meta` is polymorphic — a string for main threads, an object with
@@ -145,8 +166,21 @@ incrementally after.
 - `codex-auto-review` turns are tracked as a separate flag, not counted as the primary model.
 - Codex tool calls are JS snippets (`tools.exec_command({cmd:"…"})`); `extractCmd()` digs out the
   real shell string (string, array, or template-literal form, plus `apply_patch`).
-- Per-command token cost is approximate: tokens accrue between a command and the next
-  `token_count` event and are attributed to the preceding command.
+- Per-command token cost is approximate. For Codex, tokens accrue between a command and the next
+  `token_count` event. For Claude Code, one assistant turn's `usage` block covers all of that
+  turn's tool calls at once, so the turn's new tokens are split evenly across them.
+
+### Codex vs. Claude Code
+
+|  | Codex CLI | Claude Code |
+|---|---|---|
+| Location | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `~/.claude/projects/<slug>/<id>.jsonl` |
+| Token usage | cumulative counters (`total_token_usage` / `last_token_usage`), reconstructed | self-contained `usage` per assistant turn |
+| Tool calls | JS snippets (`tools.exec_command({cmd:"…"})`), unwrapped by `extractCmd()` | structured `tool_use` objects, already parsed |
+| Base commands | shell verb from the exec string | tool name (`Read`, `Edit`, …), with `Bash` split into its shell verb |
+| Subagents | separate rollout file per subagent, linked by `parent_thread_id` | `isSidechain` turns interleaved in the parent file — folded into the parent's totals for now |
+| Compaction | detected (counter resets), marked on the chart | not currently detected |
+| Economy signals | full (output tokens, truncation, polling, re-runs) | tool-call counts and token totals; the exec-session polling signals don't apply |
 
 ## Endpoints
 
@@ -157,5 +191,8 @@ incrementally after.
 | `GET /api/history` | lightweight rollup rows for the History table (all sessions) |
 | `GET /api/sessions?date=YYYY-MM-DD` | full session summaries for one day |
 | `GET /api/session/:uuid` | full timeline + summary |
-| `GET /api/trends?period=day\|week\|month&subagents=0\|1` | aggregated rollups (`{building:true}` while first scan runs) |
-| `GET /api/economy?range=all\|30d\|7d&subagents=0\|1` | token-economy signals from the same rollups |
+| `GET /api/trends?period=day\|week\|month&subagents=0\|1&source=codex\|claude` | aggregated rollups (`{building:true}` while first scan runs) |
+| `GET /api/economy?range=all\|30d\|7d&subagents=0\|1&source=codex\|claude` | token-economy signals from the same rollups |
+
+Every session record carries `source` (`"codex"` or `"claude"`). The aggregate endpoints accept
+an optional `source=` filter; omit it for the combined view.
