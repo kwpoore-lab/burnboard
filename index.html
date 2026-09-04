@@ -847,6 +847,11 @@ const HIST_COLS = [
   { key: 'cmds', label: 'Cmds', num: true, get: t => t.toolCalls || 0 },
 ];
 
+// mirrors server.js: the "hour" view covers the last couple of hours in 5-minute
+// slots, since agent runs are minutes long rather than hours
+const HOUR_WINDOW_MS = 2 * 3600 * 1000;
+const HOUR_SLOT_MIN = 5;
+
 function histBucketKey(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return '?';
@@ -859,7 +864,7 @@ function histBucketKey(iso) {
   }
   const ymd = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
   if (histPeriod === 'hour') {
-    const q = Math.floor(d.getMinutes() / 15) * 15;
+    const q = Math.floor(d.getMinutes() / HOUR_SLOT_MIN) * HOUR_SLOT_MIN;
     return `${ymd}T${p2(d.getHours())}:${p2(q)}`;
   }
   return ymd;
@@ -891,8 +896,8 @@ async function loadHistory() {
 
 function rebuildPeriodSelect() {
   let src = histFiltered();
-  if (histPeriod === 'hour') {   // hour view = last 24h only
-    const cutoff = Date.now() - 24 * 3600 * 1000;
+  if (histPeriod === 'hour') {   // hour view = the last couple of hours only
+    const cutoff = Date.now() - HOUR_WINDOW_MS;
     src = src.filter(s => new Date(s.startedAt).getTime() >= cutoff);
   }
   const keys = [...new Set(src.map(s => histBucketKey(s.startedAt)))].sort().reverse();
@@ -1081,9 +1086,10 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetai
 // trends
 // ---------------------------------------------------------------------------
 let trendPeriod = 'day';
-// "Hour" filter = last 24h, rendered as 15-minute bars
-const perLbl = (p) => p === 'hour' ? 'hour — last 24h, 15m bars' : p;
-const perLblN = (p) => p === 'hour' ? '15m bars (last 24h)' : p + 's';
+// "Hour" filter = the last couple of hours, rendered as 5-minute bars
+const hourWindowLbl = `last ${HOUR_WINDOW_MS / 3600000}h`;
+const perLbl = (p) => p === 'hour' ? `hour — ${hourWindowLbl}, ${HOUR_SLOT_MIN}m bars` : p;
+const perLblN = (p) => p === 'hour' ? `${HOUR_SLOT_MIN}m bars (${hourWindowLbl})` : p + 's';
 let trendSub = false;
 let trendData = null;
 let trendPoll = null;
@@ -1220,7 +1226,7 @@ function trendDetailRows(r, B) {
   return `<tr class="trow-detail"><td colspan="4">
     ${tbarChart(B, b => (r.per[b] && r.per[b].tokens) || 0, 'tokens per ' + perLbl(trendPeriod))}
     <div style="overflow-x:auto"><table><tbody>
-      <tr class="lbl-row"><td>${trendPeriod}${T !== B ? ' (last 96)' : ''}</td>${T.map(b => `<td class="num">${b.slice(5)}</td>`).join('')}</tr>
+      <tr class="lbl-row"><td>${trendPeriod}${T !== B ? ` (last ${T.length})` : ''}</td>${T.map(b => `<td class="num">${b.slice(5)}</td>`).join('')}</tr>
       <tr><td class="num">tok</td>${T.map(b => `<td class="num">${kfmt((r.per[b] && r.per[b].tokens) || 0)}</td>`).join('')}</tr>
       <tr><td class="num">runs</td>${T.map(b => `<td class="num">${(r.per[b] && r.per[b].count) || 0}</td>`).join('')}</tr>
     </tbody></table></div></td></tr>`;
@@ -1427,7 +1433,7 @@ function ctPanel(base) {
       h += `<tr class="trow-detail"><td colspan="4">
         ${tbarChart(B, b => (rpf(r.per[b], b) || 0), esc(short(r.cmd, 90)) + ' — ' + rowLabel.toLowerCase() + ' per ' + perLbl(s.period))}
         <div style="overflow-x:auto"><table><tbody>
-          <tr class="lbl-row"><td>${s.period}${T !== B ? ' (last 96)' : ''}</td>${T.map(b => `<td class="num">${b.slice(5)}</td>`).join('')}</tr>
+          <tr class="lbl-row"><td>${s.period}${T !== B ? ` (last ${T.length})` : ''}</td>${T.map(b => `<td class="num">${b.slice(5)}</td>`).join('')}</tr>
           <tr><td class="num">${esc(rowLabel)}</td>${T.map(b => `<td class="num">${kfmt(rpf(r.per[b], b) || 0)}</td>`).join('')}</tr>
           <tr><td class="num">runs</td>${T.map(b => `<td class="num">${(r.per[b] && r.per[b].calls) || 0}</td>`).join('')}</tr>
         </tbody></table></div></td></tr>`;

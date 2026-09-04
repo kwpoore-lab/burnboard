@@ -24,6 +24,10 @@ const PORT = parseInt(argVal('--port', process.env.PORT || '4317'), 10);
 
 const TICK_MS = 2000;          // rescan cadence
 const LIVE_WINDOW_MS = 15 * 60 * 1000;   // show in live feed if touched within this
+// The "hour" view is for watching work in progress, and agent runs are minutes
+// long, not hours — so it covers the last couple of hours in 5-minute slots.
+const HOUR_WINDOW_MS = 2 * 3600 * 1000;
+const HOUR_SLOT_MIN = 5;
 const RUNNING_MS = 15 * 1000;  // green dot
 const IDLE_MS = 5 * 60 * 1000; // yellow dot
 
@@ -389,8 +393,8 @@ function bucketKey(period, iso) {
     t.setDate(t.getDate() - ((t.getDay() + 6) % 7));      // back to Monday
     return `${t.getFullYear()}-${p2(t.getMonth() + 1)}-${p2(t.getDate())}`;
   }
-  if (period === 'hour') {   // the finest filter = even 15-minute slots
-    const q = Math.floor(d.getMinutes() / 15) * 15;
+  if (period === 'hour') {   // the finest filter = even 5-minute slots
+    const q = Math.floor(d.getMinutes() / HOUR_SLOT_MIN) * HOUR_SLOT_MIN;
     return `${ymd}T${p2(d.getHours())}:${p2(q)}`;
   }
   return ymd;
@@ -422,21 +426,21 @@ function pickSessions(includeSub, model, effort, source) {
     && (!source || r.source === source));
 }
 
-// the "hour" (15-minute) view only covers the last 24 hours
+// the "hour" (5-minute) view only covers the last couple of hours
 function windowSessions(recs, period) {
   if (period !== 'hour') return recs;
-  const cutoff = Date.now() - 24 * 3600 * 1000;
+  const cutoff = Date.now() - HOUR_WINDOW_MS;
   return recs.filter((r) => new Date(r.startedAt).getTime() >= cutoff);
 }
 
-// every 15-minute slot for the last 24h, so the hour chart shows the full span
+// every 5-minute slot in the window, so the hour chart shows the full span
 function hourWindowBuckets() {
   const p2 = (n) => String(n).padStart(2, '0');
   const now = new Date();
   now.setSeconds(0, 0);
-  now.setMinutes(Math.floor(now.getMinutes() / 15) * 15);
+  now.setMinutes(Math.floor(now.getMinutes() / HOUR_SLOT_MIN) * HOUR_SLOT_MIN);
   const out = [];
-  for (let t = now.getTime() - 24 * 3600 * 1000; t <= now.getTime(); t += 15 * 60 * 1000) {
+  for (let t = now.getTime() - HOUR_WINDOW_MS; t <= now.getTime(); t += HOUR_SLOT_MIN * 60 * 1000) {
     const d = new Date(t);
     out.push(`${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}`);
   }
