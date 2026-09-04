@@ -613,7 +613,9 @@ function focusBlock(t, depth) {
           <div>
             <p class="subh">Consumption by base command (params ignored)</p>
             <table><thead><tr>
-              <th>Base</th><th class="num">Runs</th><th class="num">Δ tokens</th><th class="num">Last</th></tr></thead>
+              <th>Base</th><th class="num">Runs</th>
+              <th class="num" title="summed Tokens across every run of this base command">Command total</th>
+              <th class="num">Last</th></tr></thead>
               <tbody>${stats.length ? stats.map(g => `<tr>
                 <td class="base"><span class="cmdlink" data-cmd="${esc(g.base)}">${esc(g.base)}</span></td>
                 <td class="num">${g.count}</td>
@@ -898,7 +900,8 @@ async function openDetail(id) {
     </dl>
     <div class="chartwrap">${consumptionChart(s.tokenSeries)}</div>
     ${stats.length ? `<p class="subh">Consumption by base command</p>
-      <table><thead><tr><th>Base</th><th class="num">Runs</th><th class="num">Δ tokens</th></tr></thead>
+      <table><thead><tr><th>Base</th><th class="num">Runs</th>
+        <th class="num" title="summed Tokens across every run of this base command">Command total</th></tr></thead>
       <tbody>${stats.map(g => `<tr><td class="base"><span class="cmdlink" data-cmd="${esc(g.base)}">${esc(g.base)}</span></td><td class="num">${g.count}</td><td class="num">${fmt(g.tokens)}</td></tr>`).join('')}</tbody></table>` : ''}
     <h2 style="border:0">Timeline (${r.events.length}) — latest first</h2>
     ${r.events.slice().reverse().map(evRow).join('')}`;
