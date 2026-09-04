@@ -339,7 +339,7 @@ let building = false;
 let rollupReady = false;
 let buildProgress = { done: 0, total: 0 };
 
-const ROLLUP_VERSION = 17;   // bump to force a full re-scan when the parser changes
+const ROLLUP_VERSION = 18;   // bump to force a full re-scan when the parser changes
 function loadRollupCache() {
   try {
     const j = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
@@ -439,11 +439,26 @@ function pickSessions(includeSub, model, effort, source) {
     && (!source || r.source === source));
 }
 
-// the "hour" (5-minute) view only covers the last couple of hours
+// The "hour" (5-minute) view covers the last hour. A session that started
+// earlier but is still working belongs in it, so membership is decided by
+// whether it ran any command inside the window — not by its start time.
 function windowSessions(recs, period) {
   if (period !== 'hour') return recs;
   const cutoff = Date.now() - HOUR_WINDOW_MS;
-  return recs.filter((r) => new Date(r.startedAt).getTime() >= cutoff);
+  return recs.filter((r) => new Date(r.startedAt).getTime() >= cutoff
+    || (r.recentCmds || []).some((c) => Date.parse(c.t) >= cutoff));
+}
+
+// commands run inside the hour window, newest sessions included
+function* hourCommands(recs, base) {
+  const cutoff = Date.now() - HOUR_WINDOW_MS;
+  for (const r of recs) {
+    for (const c of r.recentCmds || []) {
+      if (Date.parse(c.t) < cutoff) continue;
+      if (base && c.b !== base) continue;
+      yield [r, c];
+    }
+  }
 }
 
 // every 5-minute slot in the window, so the hour chart shows the full span
@@ -461,8 +476,65 @@ function hourWindowBuckets() {
 }
 const seedBuckets = (period) => new Set(period === 'hour' ? hourWindowBuckets() : []);
 
+// Every other period buckets a session's whole total at its start time, which
+// is useless at this scale — an hour of work would be one bar an hour ago. Here
+// each command lands in the slot it actually ran in. The per-request token
+// breakdown (in/cached/out) is only known per session, so it is left out.
+function hourTrends(recs) {
+  const buckets = seedBuckets('hour');
+  const totals = {};
+  const cmdMap = new Map();
+  const promptMap = new Map();
+  const seenInBucket = {};
+  const sessionIds = new Set();
+  for (const [r, c] of hourCommands(recs)) {
+    const b = bucketKey('hour', c.t);
+    buckets.add(b);
+    const T = totals[b] || (totals[b] = { tokens: 0, sessions: 0, commands: 0 });
+    T.tokens += c.k; T.commands++;
+    const seen = seenInBucket[b] || (seenInBucket[b] = new Set());
+    if (!seen.has(r.id)) { seen.add(r.id); T.sessions++; }
+    sessionIds.add(r.id);
+
+    const g = cmdMap.get(c.b) || (cmdMap.set(c.b, { base: c.b, total: 0, count: 0, per: {} }).get(c.b));
+    g.total += c.k; g.count++;
+    const pc = g.per[b] || (g.per[b] = { tokens: 0, count: 0 });
+    pc.tokens += c.k; pc.count++;
+
+    if (r.prompt) {
+      const key = r.prompt.toLowerCase().slice(0, 120);
+      const pg = promptMap.get(key)
+        || (promptMap.set(key, { prompt: r.prompt, project: r.project, total: 0, count: 0, ids: new Set(), per: {} }).get(key));
+      pg.total += c.k;
+      pg.ids.add(r.id); pg.count = pg.ids.size;
+      if (!pg.project && r.project) pg.project = r.project;
+      const pb = pg.per[b] || (pg.per[b] = { tokens: 0, count: 0 });
+      pb.tokens += c.k; pb.count++;
+    }
+  }
+  const grand = Object.values(totals).reduce((a, t) => {
+    for (const k of Object.keys(t)) a[k] = (a[k] || 0) + t[k];
+    return a;
+  }, {});
+  grand.sessions = sessionIds.size;
+  return {
+    period: 'hour',
+    byCommandTime: true,
+    building: !rollupReady,
+    progress: buildProgress,
+    buckets: [...buckets].sort(),
+    totals,
+    grand,
+    byCommand: [...cmdMap.values()].sort((a, b) => b.total - a.total),
+    byPrompt: [...promptMap.values()].map(({ ids, ...p }) => p).sort((a, b) => b.total - a.total).slice(0, 400),
+    sessions: sessionIds.size,
+    facets: rollupFacets(),
+  };
+}
+
 function trends(period, includeSub, model, effort, source) {
   const recs = windowSessions(pickSessions(includeSub, model, effort, source), period);
+  if (period === 'hour') return hourTrends(recs);
   const buckets = seedBuckets(period);
   const totals = {};
   const cmdMap = new Map();
@@ -582,8 +654,44 @@ function economy(sinceMs, includeSub, model, effort, source) {
 
 // Time-series for one base command: output tokens / calls / truncated / Δ tokens
 // per day|week|month bucket, plus per-invocation and per-polled-process series.
+// same idea as hourTrends: at 5-minute resolution a command belongs in the slot
+// it ran in, not in its session's start slot
+function hourCommandTrend(base, recs) {
+  const buckets = seedBuckets('hour');
+  const series = { outTokens: {}, calls: {}, truncated: {}, delta: {} };
+  const bump = (k, b, v) => { series[k][b] = (series[k][b] || 0) + v; };
+  const sampMap = new Map();
+  const totals = { outTokens: 0, calls: 0, truncated: 0, delta: 0, sessions: 0 };
+  const sessionIds = new Set();
+  for (const [r, c] of hourCommands(recs, base)) {
+    const b = bucketKey('hour', c.t);
+    buckets.add(b);
+    sessionIds.add(r.id);
+    bump('outTokens', b, c.o); bump('calls', b, 1); bump('truncated', b, c.tr); bump('delta', b, c.k);
+    totals.outTokens += c.o; totals.calls++; totals.truncated += c.tr; totals.delta += c.k;
+    const key = c.c || base;
+    const e = sampMap.get(key) || (sampMap.set(key, { cmd: key, count: 0, out: 0, trunc: 0, per: {} }).get(key));
+    e.count++; e.out += c.o; e.trunc += c.tr;
+    const pb = e.per[b] || (e.per[b] = { outTokens: 0, calls: 0, truncated: 0 });
+    pb.outTokens += c.o; pb.calls++; pb.truncated += c.tr;
+  }
+  totals.sessions = sessionIds.size;
+  return {
+    base,
+    period: 'hour',
+    byCommandTime: true,
+    buckets: [...buckets].sort(),
+    series,
+    totals,
+    samples: [...sampMap.values()].sort((a, b) => b.out - a.out || b.count - a.count).slice(0, 12),
+    polls: [],
+    facets: rollupFacets(),
+  };
+}
+
 function commandTrend(base, period, includeSub, model, effort, source) {
   const recs = windowSessions(pickSessions(includeSub, model, effort, source), period);
+  if (period === 'hour') return hourCommandTrend(base, recs);
   const buckets = seedBuckets(period);
   const series = { outTokens: {}, calls: {}, truncated: {}, delta: {} };
   const bump = (k, b, v) => { series[k][b] = (series[k][b] || 0) + v; };

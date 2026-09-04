@@ -372,6 +372,14 @@ function modelMark(model, source) {
   const mi = modelStyle(model, source);
   return mi.mark ? `<span class="mmark" style="color:${mi.color}" title="model: ${attr(model)}">${mi.mark}</span>` : '';
 }
+// mirrors baseCommand in the source parsers: show the command someone cares
+// about, not the "export FOO=1;" that precedes it (full text stays in the title)
+const SETUP_CLAUSE = /^(?:export\s+(?:\w+=(?:"[^"]*"|'[^']*'|\S+)\s*)+|\w+=(?:"[^"]*"|'[^']*'|\S+)|cd\s+\S+|source\s+\S+|\.\s+\S+)\s*(?:;|&&)\s*/;
+function realCmd(s) {
+  let out = String(s == null ? '' : s).trim();
+  for (let i = 0; i < 8 && SETUP_CLAUSE.test(out); i++) out = out.replace(SETUP_CLAUSE, '').trim();
+  return out || String(s == null ? '' : s).trim();
+}
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 // use inside a double-quoted HTML attribute
 function attr(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -711,7 +719,7 @@ function focusBlock(t, depth) {
               <th class="num" title="running sum of the Tokens column through this command, reset at the start of each prompt">Command total</th></tr></thead>
               <tbody>${cmds.length ? cmds.map(c => `<tr>
                 <td class="num">${hhmmss(c.ts)}</td>
-                <td class="cmd" title="${attr(c.cmd)}">${esc(short(c.cmd, 140))}</td>
+                <td class="cmd" title="${attr(c.cmd)}">${esc(short(realCmd(c.cmd), 140))}</td>
                 <td class="num">${c.delta ? fmt(c.delta) : '·'}</td>
                 <td class="num">${fmt(c.runSum)}</td></tr>`).join('')
                 : `<tr><td colspan="4" class="empty">${turns.length
@@ -1211,11 +1219,11 @@ function renderTrends() {
       <span><b>${fmt(g.tokens)}</b> billed tokens</span>
       <span><b>${fmt(g.sessions)}</b> sessions</span>
       <span><b>${fmt(g.commands)}</b> commands</span>
-      <span>in <b>${fmt(g.input)}</b></span>
+      ${d.byCommandTime ? '' : `<span>in <b>${fmt(g.input)}</b></span>
       <span>cached <b>${fmt(g.cached)}</b></span>
       <span>out <b>${fmt(g.output)}</b></span>
-      <span>reasoning <b>${fmt(g.reasoning)}</b></span>
-      <span style="margin-left:auto">${B.length} ${perLblN(trendPeriod)} · ${d.sessions} sessions${trendSub ? ' (incl. subagents)' : ''}</span>
+      <span>reasoning <b>${fmt(g.reasoning)}</b></span>`}
+      <span style="margin-left:auto">${B.length} ${perLblN(trendPeriod)} · ${d.sessions} sessions${trendSub ? ' (incl. subagents)' : ''}${d.byCommandTime ? ' · by command time' : ''}</span>
     </div>
     ${tbarChart(B, totalsByBucket, 'billed tokens per ' + perLbl(trendPeriod))}
     <div class="tcols">
@@ -1438,14 +1446,14 @@ function ctPanel(base) {
   const sampRows = (rows) => rows.map(r => {
     const o = open.has(r.cmd);
     let h = `<tr class="ctrow" data-ct-row="${attr(r.cmd)}" data-ct-rowbase="${attr(base)}" style="cursor:pointer">
-      <td class="cmd" title="${attr(r.cmd)}">${o ? '▾ ' : '▸ '}${esc(short(r.cmd, 120))}</td>
+      <td class="cmd" title="${attr(r.cmd)}">${o ? '▾ ' : '▸ '}${esc(short(realCmd(r.cmd), 120))}</td>
       <td class="num">${fmt(r.count)}</td>
       <td class="num">${fmt(r.out)}</td>
       <td class="trend-cell">${tspark(r.per, B, rpf)}</td></tr>`;
     if (o) {
       const T = B.length > 96 ? B.slice(-96) : B;
       h += `<tr class="trow-detail"><td colspan="4">
-        ${tbarChart(B, b => (rpf(r.per[b], b) || 0), esc(short(r.cmd, 90)) + ' — ' + rowLabel.toLowerCase() + ' per ' + perLbl(s.period))}
+        ${tbarChart(B, b => (rpf(r.per[b], b) || 0), esc(short(realCmd(r.cmd), 90)) + ' — ' + rowLabel.toLowerCase() + ' per ' + perLbl(s.period))}
         <div style="overflow-x:auto"><table><tbody>
           <tr class="lbl-row"><td>${s.period}${T !== B ? ` (last ${T.length})` : ''}</td>${T.map(b => `<td class="num">${b.slice(5)}</td>`).join('')}</tr>
           <tr><td class="num">${esc(rowLabel)}</td>${T.map(b => `<td class="num">${kfmt(rpf(r.per[b], b) || 0)}</td>`).join('')}</tr>
@@ -1606,7 +1614,7 @@ function renderEconomy() {
         <th class="num">~Tokens</th><th>Command</th><th>Session</th></tr></thead><tbody>
         ${d.bigOutputs.map(b => `<tr onclick="${sessLink(b)}" style="cursor:pointer">
           <td class="num">${fmt(b.tokens)}${b.truncated ? ' ✂' : ''}</td>
-          <td class="cmd">${esc(short(b.cmd || b.base, 90))}</td>
+          <td class="cmd" title="${attr(b.cmd || b.base)}">${esc(short(realCmd(b.cmd || b.base), 90))}</td>
           <td style="color:var(--dim)">${esc(b.project || '')} · ${esc(short(b.prompt, 44))}</td></tr>`).join('')}
       </tbody></table>
     </div>
@@ -1620,7 +1628,7 @@ function renderEconomy() {
         ${d.dupes.map(x => `<tr onclick="${sessLink(x)}" style="cursor:pointer">
           <td class="num">${x.count}×</td>
           <td class="num">${fmt(x.tokens)}</td>
-          <td class="cmd">${esc(short(x.cmd, 90))}</td>
+          <td class="cmd" title="${attr(x.cmd)}">${esc(short(realCmd(x.cmd), 90))}</td>
           <td style="color:var(--dim)">${esc(x.project || '')} · ${esc(short(x.prompt, 40))}</td></tr>`).join('')}
       </tbody></table>
     </div>
