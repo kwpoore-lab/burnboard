@@ -183,17 +183,19 @@
   .bc-yax { display: flex; flex-direction: column; justify-content: space-between; width: 46px;
     height: 150px; font: 10px/1 var(--mono); color: var(--dim); text-align: right; flex: none; }
   .bc-scroll { flex: 1 1 0; min-width: 0; overflow-x: auto; overflow-y: hidden; }
-  .bc-plot { position: relative; display: flex; align-items: flex-end;
-    justify-content: space-between; height: 150px; border-bottom: 1px solid var(--border);
+  .bc-plot { position: relative; display: flex; align-items: flex-end; gap: 1px;
+    justify-content: flex-start; height: 150px; border-bottom: 1px solid var(--border);
     background: repeating-linear-gradient(to top, transparent 0, transparent calc(25% - 1px), var(--border) calc(25% - 1px), var(--border) 25%); }
-  .bc-bar { flex: 0 0 auto; min-height: 1px; background: var(--accent); opacity: .8; border-radius: 1px 1px 0 0; }
+  /* bars share the plot evenly and sit a pixel apart — no dead space between them */
+  .bc-bar { flex: 1 1 0; min-width: 2px; min-height: 1px; background: var(--accent); opacity: .8;
+    border-radius: 1px 1px 0 0; }
   .bc-bar:hover { opacity: 1; }
   .bc-line { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .bc-line polyline { fill: none; stroke: var(--purple); stroke-width: 1.4; opacity: .5;
     vector-effect: non-scaling-stroke; }
-  .bc-xax { display: flex; justify-content: space-between; margin-top: 3px;
+  .bc-xax { display: flex; justify-content: flex-start; gap: 1px; margin-top: 3px;
     font: 9.5px/1 var(--mono); color: var(--dim); }
-  .bc-xax span { flex: 0 0 auto; white-space: nowrap; text-align: center; overflow: visible; }
+  .bc-xax span { flex: 1 1 0; min-width: 0; white-space: nowrap; text-align: center; overflow: visible; }
   .ct-ctrls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 4px; }
   .ct-ctrls .seg button { padding: 3px 9px; font-size: 11px; }
   select.facet { margin-left: 8px; font-size: 12px; padding: 3px 6px; max-width: 160px; }
@@ -665,6 +667,7 @@ function focusBlock(t, depth) {
     ? `<div class="prompt"><span class="lbl">latest message</span><p>${esc(t.lastUserText)}</p></div>` : '';
 
   const cmds = (t.commands || []).slice().reverse();      // latest first
+  const turns = (t.turns || []).slice().reverse();       // review agents: no commands, only turns
   const stats = t.commandStats || [];
   const promptLine = t.lastUserText || t.firstUserText || '';
 
@@ -711,10 +714,20 @@ function focusBlock(t, depth) {
                 <td class="cmd" title="${attr(c.cmd)}">${esc(short(c.cmd, 140))}</td>
                 <td class="num">${c.delta ? fmt(c.delta) : '·'}</td>
                 <td class="num">${fmt(c.runSum)}</td></tr>`).join('')
-                : '<tr><td colspan="4" class="empty">No commands yet.</td></tr>'}
+                : `<tr><td colspan="4" class="empty">${turns.length
+                    ? 'This agent runs no commands — its turns are below.' : 'No commands yet.'}</td></tr>`}
               </tbody></table></div>
           </div>
           <div>
+            ${turns.length ? `<p class="subh">Turns — latest first</p>
+            <div class="cmdscroll"><table><thead><tr>
+              <th>Time</th><th>What the agent said</th>
+              <th class="num" title="billed tokens consumed by this turn">Tokens</th></tr></thead>
+              <tbody>${turns.map(t2 => `<tr>
+                <td class="num">${hhmmss(t2.ts)}</td>
+                <td title="${attr(t2.text)}">${esc(short(t2.text || '—', 120))}</td>
+                <td class="num">${t2.delta ? fmt(t2.delta) : '·'}</td></tr>`).join('')}
+              </tbody></table></div>` : `
             <p class="subh">Consumption by base command (params ignored)</p>
             <table><thead><tr>
               <th>Base</th><th class="num">Runs</th>
@@ -726,7 +739,7 @@ function focusBlock(t, depth) {
                 <td class="num">${fmt(g.tokens)}</td>
                 <td class="num">${hhmmss(g.lastTs)}</td></tr>`).join('')
                 : '<tr><td colspan="4" class="empty">–</td></tr>'}
-              </tbody></table>
+              </tbody></table>`}
           </div>
         </div>
       </div>
@@ -847,9 +860,9 @@ const HIST_COLS = [
   { key: 'cmds', label: 'Cmds', num: true, get: t => t.toolCalls || 0 },
 ];
 
-// mirrors server.js: the "hour" view covers the last couple of hours in 5-minute
-// slots, since agent runs are minutes long rather than hours
-const HOUR_WINDOW_MS = 2 * 3600 * 1000;
+// mirrors server.js: the "hour" view covers the last hour in 5-minute slots,
+// since agent runs are minutes long rather than hours
+const HOUR_WINDOW_MS = 1 * 3600 * 1000;
 const HOUR_SLOT_MIN = 5;
 
 function histBucketKey(iso) {
@@ -1156,8 +1169,9 @@ function tbarChart(buckets, valueFn, label, opts = {}) {
   const vals = buckets.map(valueFn);
   const max = Math.max(...vals, 1);
   const n = buckets.length;
-  const bw = Math.min(13, Math.max(3, Math.round(720 / n)));   // bar width px
-  const slot = Math.max(bw + 2, 6);                            // bar + gap
+  // bars stretch to fill the plot; this is only the width below which the chart
+  // starts scrolling sideways instead of squeezing bars into slivers
+  const slot = 6;                                              // min bar + gap px
   const wantW = n * slot;
   const scrolls = wantW > 1180;                                // (title hint only)
   const step = Math.max(1, Math.ceil(n / Math.floor(Math.max(wantW, 980) / 66)));
@@ -1176,10 +1190,10 @@ function tbarChart(buckets, valueFn, label, opts = {}) {
       <div class="bc-yax">${[1, 0.75, 0.5, 0.25, 0].map(f => `<span>${kfmt(max * f)}</span>`).join('')}</div>
       <div class="bc-scroll"><div class="bc-inner" style="width:max(100%, ${wantW}px)">
         <div class="bc-plot">
-          ${vals.map((v, i) => `<div class="bc-bar" style="width:${bw}px;height:${(v / max * 100).toFixed(1)}%" title="${esc(buckets[i])} — ${fmt(v)}"></div>`).join('')}
+          ${vals.map((v, i) => `<div class="bc-bar" style="height:${(v / max * 100).toFixed(1)}%" title="${esc(buckets[i])} — ${fmt(v)}"></div>`).join('')}
           ${lineSvg}
         </div>
-        <div class="bc-xax">${buckets.map((b, i) => `<span style="width:${bw}px">${i % step === 0 ? esc(lbl(b)) : ''}</span>`).join('')}</div>
+        <div class="bc-xax">${buckets.map((b, i) => `<span>${i % step === 0 ? esc(lbl(b)) : ''}</span>`).join('')}</div>
       </div></div>
     </div>
   </div>`;

@@ -25,8 +25,8 @@ const PORT = parseInt(argVal('--port', process.env.PORT || '4317'), 10);
 const TICK_MS = 2000;          // rescan cadence
 const LIVE_WINDOW_MS = 15 * 60 * 1000;   // show in live feed if touched within this
 // The "hour" view is for watching work in progress, and agent runs are minutes
-// long, not hours — so it covers the last couple of hours in 5-minute slots.
-const HOUR_WINDOW_MS = 2 * 3600 * 1000;
+// long, not hours — so it covers the last hour in 5-minute slots.
+const HOUR_WINDOW_MS = 1 * 3600 * 1000;
 const HOUR_SLOT_MIN = 5;
 const RUNNING_MS = 15 * 1000;  // green dot
 const IDLE_MS = 5 * 60 * 1000; // yellow dot
@@ -138,6 +138,18 @@ function buildCommands(sum) {
   return out;
 }
 
+// per-turn cost, for sessions that run no commands at all: cum is the running
+// sum of billed tokens, so consecutive turns difference cleanly
+function buildTurns(sum) {
+  const out = [];
+  let prev = 0;
+  for (const t of sum.turns || []) {
+    out.push({ ts: t.ts, endTs: t.endTs, n: t.n, text: t.text, cum: t.cum, delta: Math.max(0, t.cum - prev) });
+    prev = t.cum;
+  }
+  return out;
+}
+
 function commandStats(cmds) {
   const m = new Map();
   for (const c of cmds) {
@@ -244,6 +256,7 @@ function decorate(sum, full) {
     lastAssistantText: sum.lastAssistantText,
     lastExec: sum.lastExec,
     commands: cmds ? cmds.slice(-150) : undefined,
+    turns: cmds && !cmds.length ? buildTurns(sum).slice(-150) : undefined,
     commandStats: cmds ? commandStats(cmds) : undefined,
   };
 }
