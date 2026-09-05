@@ -1044,6 +1044,79 @@ function carryCost(recs) {
 
 const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
 
+// ---------------------------------------------------------------------------
+// Sequence mining — patterns a per-command total cannot see
+// ---------------------------------------------------------------------------
+// Aggregates say "wait cost you 17M tokens". They cannot say "242 of those calls
+// were consecutive". Now that every command keeps its timestamp, the order is
+// there to be read, and order is where the turn waste actually shows up.
+const POLL_BASES = new Set(['write_stdin', 'wait', 'wait_agent', 'exec_command', 'sleep']);
+
+// a path-shaped token: at least one slash and a file extension. Deliberately
+// conservative — a missed path is a quiet undercount, a false one is a wrong claim
+const PATH_RE = /(?:[\w.@~-]+\/)+[\w.@-]+\.[A-Za-z]\w{0,8}/g;
+const pathsIn = (cmd) => [...new Set(String(cmd || '').match(PATH_RE) || [])];
+
+function sequences(recs) {
+  const runs = [];
+  const reread = new Map();
+  const idiom = new Map();
+  let runTurns = 0;
+
+  for (const r of recs) {
+    const c = r.recentCmds || [];
+    if (!c.length) continue;
+
+    // unbroken stretches of polling: nothing else happened in between
+    for (let i = 0; i < c.length;) {
+      if (!POLL_BASES.has(c[i].b)) { i++; continue; }
+      let j = i;
+      while (j < c.length && POLL_BASES.has(c[j].b)) j++;
+      const n = j - i;
+      if (n >= 8) {
+        runTurns += n - 1;                       // one call would have sufficed
+        runs.push({
+          n, base: c[i].b, sessionId: r.id, prompt: r.prompt, project: r.project,
+          mins: Math.round((Date.parse(c[j - 1].t) - Date.parse(c[i].t)) / 60000),
+        });
+      }
+      i = j;
+    }
+
+    // the same file read more than once in one session — the content is already
+    // in context the second time
+    const seen = new Map();
+    for (const x of c) {
+      if (classOf(x.b) !== 'read') continue;
+      for (const p of pathsIn(x.c)) {
+        const n = (seen.get(p) || 0) + 1;
+        seen.set(p, n);
+        if (n > 1) {
+          const e = reread.get(p) || (reread.set(p, { path: p, extra: 0, sessions: new Set() }).get(p));
+          e.extra++; e.sessions.add(r.id);
+        }
+      }
+    }
+
+    // two different read commands back to back — the search-then-read idiom,
+    // which one ranged read usually replaces
+    for (let k = 1; k < c.length; k++) {
+      const a = c[k - 1].b, b = c[k].b;
+      if (a === b || classOf(a) !== 'read' || classOf(b) !== 'read') continue;
+      const key = a + ' → ' + b;
+      idiom.set(key, (idiom.get(key) || 0) + 1);
+    }
+  }
+
+  return {
+    runs: runs.sort((a, b) => b.n - a.n).slice(0, 5), runTurns,
+    reread: [...reread.values()].sort((a, b) => b.extra - a.extra).slice(0, 5),
+    rereadTurns: [...reread.values()].reduce((a, e) => a + e.extra, 0),
+    idiom: [...idiom.entries()].map(([pair, n]) => ({ pair, n })).sort((a, b) => b.n - a.n).slice(0, 3),
+  };
+}
+
+
 // Remedies are drawn from what detectToolchain() actually found. A suggestion
 // naming a tool that is not installed is worse than saying nothing.
 function remediesFor(kind, ctx, tc) {
@@ -1077,6 +1150,20 @@ function remediesFor(kind, ctx, tc) {
     out.push('Truncated output is paid for and then discarded — narrow the query rather than clipping it.');
     const f = filterFor(ctx.base);
     if (f) out.push(`${f} compacts before the limit is hit.`);
+  }
+  if (kind === 'pollrun') {
+    out.push(`One wait covering the whole span replaces the run — the longest here was ${ctx.n} calls over ${ctx.mins} minutes.`);
+    out.push('If the runtime supports a blocking wait or a longer timeout, a single call ends the loop.');
+    if (tc.agents.length) out.push(`Or hand the job to a subagent (${tc.agents.slice(0, 3).join(', ')}) so its waiting is not billed against this context.`);
+  }
+  if (kind === 'reread') {
+    out.push('If the same slice came back twice it is already in context — refer to it rather than reading again.');
+    out.push('If each read took a different range, the file is being consumed piecemeal: read the section that matters once, or split the file so a whole read is cheap.');
+  }
+  if (kind === 'idiom') {
+    out.push('Locating then reading is two turns for one question — a single ranged read (offset + limit) does both.');
+    const f = filterFor(ctx.first);
+    if (f) out.push(`${f} also trims what the search half returns.`);
   }
   if (kind === 'hookmiss') {
     out.push(`Your ${ctx.event} hook (${ctx.matcher}) runs "${ctx.runs}" but these calls still ran unfiltered — check why they fall through.`);
@@ -1130,6 +1217,47 @@ function advice(sinceMs, includeSub, model, effort, source, repo) {
     evidence: { repeats: dupeRuns, worst: worstDupe.cmd, worstRepeats: worstDupe.n, perTurn },
     remedies: remediesFor('dupes', { cmd: worstDupe.cmd, n: worstDupe.n }, tc),
   });
+
+  const seq = sequences(recs);
+  if (seq.runs.length) {
+    const top = seq.runs[0];
+    F({
+      id: 'pollrun', kind: 'turns',
+      title: 'Polling in unbroken runs, nothing else happening',
+      detail: `Of those poll turns, ${seq.runTurns.toLocaleString()} sat inside unbroken runs with nothing `
+        + `in between — the longest ${top.n} consecutive ${top.base} calls over ${top.mins} minutes, `
+        + 'which one wait would have covered. (A subset of the finding above, not extra cost.)',
+      turns: seq.runTurns, turnTokens: seq.runTurns * perTurn,
+      evidence: { longestRun: top.n, minutes: top.mins, base: top.base, sessionId: top.sessionId,
+        prompt: top.prompt, runs: seq.runs.length, turnsInRuns: seq.runTurns },
+      remedies: remediesFor('pollrun', top, tc),
+    });
+  }
+  if (seq.rereadTurns) {
+    const top = seq.reread[0];
+    F({
+      id: 'reread', kind: 'turns',
+      title: 'The same file read more than once in one session',
+  detail: `${seq.rereadTurns.toLocaleString()} reads of a file this session had already opened — usually a `
+        + `different slice each time rather than the identical command. Most re-read: ${top.path} `
+        + `(${top.extra}× beyond the first, across ${top.sessions.size} session${top.sessions.size > 1 ? 's' : ''}).`,
+      turns: seq.rereadTurns, turnTokens: seq.rereadTurns * perTurn,
+      evidence: { repeatReads: seq.rereadTurns, top: seq.reread.map((e) => ({ path: e.path, extra: e.extra, sessions: e.sessions.size })) },
+      remedies: remediesFor('reread', {}, tc),
+    });
+  }
+  if (seq.idiom.length && seq.idiom[0].n >= 50) {
+    const top = seq.idiom[0];
+    F({
+      id: 'idiom', kind: 'turns',
+      title: `"${top.pair}" run back to back`,
+      detail: `${top.n.toLocaleString()} times one read command was followed straight by another — `
+        + 'locating something, then reading around it, at two turns a go.',
+      turns: top.n, turnTokens: top.n * perTurn,
+      evidence: { pairs: seq.idiom },
+      remedies: remediesFor('idiom', { first: top.pair.split(' ')[0] }, tc),
+    });
+  }
 
   const cov = Math.round(carry.coverage * 100);
   for (const e of carry.byBase.slice(0, 3)) {

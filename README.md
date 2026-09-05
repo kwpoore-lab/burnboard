@@ -197,6 +197,11 @@ context, so removing one poll is worth far more than trimming what a command pri
 therefore report two currencies and never add them together: turns billed at full context price,
 and output carried as cached context for the rest of the session.
 
+Some findings come from the *order* commands ran in rather than their totals — unbroken poll
+runs, files read again that the session had already opened, and search-then-read pairs that one
+ranged read would replace. Aggregates can say a command cost you N tokens; only the sequence can
+say 242 of those calls were consecutive.
+
 Remedies are grounded in what this machine actually has. burnboard detects the local toolchain —
 an output-filtering proxy if one is installed, MCP server names, subagent definitions, skills and
 plugins, and the Bash hooks in `settings.json` — and only suggests what you can act on. It reads
