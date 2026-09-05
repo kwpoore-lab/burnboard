@@ -3,6 +3,9 @@
 **A live and historical monitor for AI coding agent usage — [OpenAI Codex CLI](https://github.com/openai/codex)
 and [Claude Code](https://claude.com/claude-code), side by side.**
 
+<img width="1904" height="1370" alt="image" src="https://github.com/user-attachments/assets/b4dc30d5-39fd-44f6-a9dd-6b3ab57b1221" />
+
+
 burnboard tails the JSONL session transcripts both tools write locally — Codex to
 `~/.codex/sessions/`, Claude Code to `~/.claude/projects/` — and turns them into a local web
 dashboard. No account access, no API keys, nothing sent anywhere. Zero dependencies, Node stdlib
