@@ -19,6 +19,10 @@
   header { display: flex; align-items: center; gap: 16px; padding: 12px 20px;
     border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); z-index: 5; }
   header h1 { font-size: 18px; margin: 0; letter-spacing: .5px; }
+  /* the repo picker scopes the whole dashboard, so it sits with the title
+     rather than among the per-view controls */
+  .brand { display: flex; flex-direction: column; align-items: stretch; gap: 5px; flex: none; }
+  .brand select.facet { margin-left: 0; width: 100%; max-width: none; }
   header h1 a { color: var(--fg); text-decoration: none; }
   header h1 a:hover { color: var(--accent); text-decoration: none; }
   header .stat { color: var(--dim); font-size: 12px; margin-left: auto; }
@@ -318,7 +322,12 @@
 </head>
 <body>
 <header>
-  <h1><a href="https://github.com/kwpoore-lab/burnboard" target="_blank" rel="noopener">burnboard</a></h1>
+  <div class="brand">
+    <h1><a href="https://github.com/kwpoore-lab/burnboard" target="_blank" rel="noopener">burnboard</a></h1>
+    <select id="repoSel" class="facet" title="which repository's sessions to show">
+      <option value="">all repos</option>
+    </select>
+  </div>
   <nav id="tabs">
     <a href="#running" data-tab="running" class="on">Activity</a>
     <a href="#history" data-tab="history">History</a>
@@ -329,9 +338,6 @@
   <span class="seg" id="srcSeg" title="which agent's sessions to show">
     <button data-src="" class="on">All agents</button><button data-src="codex" id="srcCodex">Codex</button><button data-src="claude" id="srcClaude">Claude Code</button>
   </span>
-  <select id="repoSel" class="facet" title="which repository's sessions to show">
-    <option value="">all repos</option>
-  </select>
   <span id="conn"></span>
   <span class="stat" id="hdrstat">connecting…</span>
 </header>
