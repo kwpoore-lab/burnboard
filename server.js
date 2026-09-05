@@ -11,6 +11,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 // ---------------------------------------------------------------------------
 // config
@@ -993,6 +994,254 @@ function commandTrend(base, period, includeSub, model, effort, source, from, to,
 }
 
 // ---------------------------------------------------------------------------
+// Advice — the same rollups the Economy tab shows, turned into things to change
+// ---------------------------------------------------------------------------
+// The unit of cost is the turn, not the byte. Every tool call resends the
+// context, so what a call *returns* is dwarfed by the fact that it happened at
+// all. Findings are therefore ranked by turns saved first, carried tokens
+// second, and one-shot output volume last.
+
+// What one more tool call costs, measured per session rather than globally —
+// polls cluster late in a session when the context is largest, so a per-session
+// average understates them. Conservative on purpose.
+function turnCost(recs) {
+  let billed = 0, calls = 0;
+  for (const r of recs) {
+    if (!r.toolCalls) continue;
+    billed += r.totals.billed || r.totals.total || 0;
+    calls += r.toolCalls;
+  }
+  return calls ? Math.round(billed / calls) : 0;
+}
+
+// A tool result is not paid once — it sits in context and is resent on every
+// later turn of that session. Exact where per-command timestamps survive; the
+// coverage is reported so the number is never mistaken for the whole picture.
+function carryCost(recs) {
+  const byBase = new Map();
+  let covered = 0, totalCalls = 0;
+  for (const r of recs) {
+    totalCalls += r.toolCalls || 0;
+    const cmds = r.recentCmds || [];
+    if (!cmds.length) continue;
+    covered += cmds.length;
+    for (let i = 0; i < cmds.length; i++) {
+      const remaining = cmds.length - 1 - i;
+      if (!remaining) continue;
+      const e = byBase.get(cmds[i].b) || (byBase.set(cmds[i].b, { base: cmds[i].b, carried: 0, out: 0, calls: 0 }).get(cmds[i].b));
+      e.carried += (cmds[i].o || 0) * remaining;
+      e.out += cmds[i].o || 0;
+      e.calls++;
+    }
+  }
+  return {
+    coverage: totalCalls ? covered / totalCalls : 0,
+    byBase: [...byBase.values()].sort((a, b) => b.carried - a.carried),
+  };
+}
+
+const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
+
+// Remedies are drawn from what detectToolchain() actually found. A suggestion
+// naming a tool that is not installed is worse than saying nothing.
+function remediesFor(kind, ctx, tc) {
+  const out = [];
+  const filterFor = (base) => tc.filters && tc.filters.commands.includes(String(base).split(' ')[0])
+    ? `${tc.filters.tool} ${String(base).split(' ')[0]}` : null;
+
+  if (kind === 'polls') {
+    out.push('Wait longer per poll — each check costs a full turn whatever it returns.');
+    out.push('Chain dependent steps with && into one call instead of polling between them.');
+    if (tc.agents.length) out.push(`Hand long-running work to a subagent (${tc.agents.slice(0, 3).join(', ')}) so its polling does not sit in this context.`);
+  }
+  if (kind === 'dupes') {
+    out.push('A repeated read is already in context — carry the answer forward instead of asking again.');
+    out.push('A repeated write or check usually means a retry loop: fix the failure rather than re-running.');
+    if (ctx.cmd) out.push(`Most repeated: ${ctx.cmd} (${ctx.n}× beyond the first run)`);
+  }
+  if (kind === 'carry') {
+    // a poll's output is an accumulating stdout buffer, not a query result —
+    // "add a path filter" would be nonsense advice for it
+    if (classOf(ctx.base) === 'poll') {
+      out.push('This is the polling above, seen from the context side: every check leaves its output behind for the rest of the session.');
+      out.push('Fewer, longer waits shrink both the turn count and what they leave in context.');
+    } else {
+      out.push('Narrow the command so less lands in context: path filters, --stat, -n limits, or a specific field instead of the whole document.');
+    }
+    const f = filterFor(ctx.base);
+    if (f) out.push(`${f} would filter this output before it reaches the context.`);
+  }
+  if (kind === 'truncation') {
+    out.push('Truncated output is paid for and then discarded — narrow the query rather than clipping it.');
+    const f = filterFor(ctx.base);
+    if (f) out.push(`${f} compacts before the limit is hit.`);
+  }
+  if (kind === 'hookmiss') {
+    out.push(`Your ${ctx.event} hook (${ctx.matcher}) runs "${ctx.runs}" but these calls still ran unfiltered — check why they fall through.`);
+  }
+  return out;
+}
+
+function advice(sinceMs, includeSub, model, effort, source, repo) {
+  const cutoff = sinceMs ? Date.now() - sinceMs : 0;
+  const recs = pickSessions(includeSub, model, effort, source, repo)
+    .filter((r) => !cutoff || new Date(r.startedAt).getTime() >= cutoff);
+  const tc = detectToolchain();
+  const perTurn = turnCost(recs);
+
+  let calls = 0, polls = 0, dupeRuns = 0, billed = 0;
+  const worstDupe = { cmd: null, n: 0 };
+  const trunc = new Map();
+  for (const r of recs) {
+    calls += r.toolCalls || 0;
+    polls += r.pollTurns || 0;
+    billed += r.totals.billed || r.totals.total || 0;
+    for (const d of r.dupes || []) {
+      dupeRuns += d.count - 1;
+      if (d.count - 1 > worstDupe.n) { worstDupe.n = d.count - 1; worstDupe.cmd = d.cmd; }
+    }
+    for (const [base, g] of Object.entries(r.outByBase || {})) {
+      const e = trunc.get(base) || (trunc.set(base, { base, truncated: 0, calls: 0, tokens: 0 }).get(base));
+      e.truncated += g.truncated; e.calls += g.calls; e.tokens += g.tokens;
+    }
+  }
+  const carry = carryCost(recs);
+  const findings = [];
+
+  // Two different currencies, never added together: a turn is billed at full
+  // context price, while carried output is resent as cached input. Findings
+  // report whichever applies and are ranked turns first.
+  const F = (o) => findings.push({ turns: 0, turnTokens: 0, carried: 0, ...o });
+
+  if (polls) F({
+    id: 'polls', kind: 'turns', title: 'Turns spent waiting rather than working',
+    detail: `${polls.toLocaleString()} of ${calls.toLocaleString()} tool calls (${pct(polls, calls)}%) were polls or waits. Each one resends the whole context whatever it returns.`,
+    turns: polls, turnTokens: polls * perTurn,
+    evidence: { pollTurns: polls, toolCalls: calls, sharePct: pct(polls, calls), perTurn },
+    remedies: remediesFor('polls', {}, tc),
+  });
+
+  if (dupeRuns) F({
+    id: 'dupes', kind: 'turns', title: 'Commands re-run without their output changing',
+    detail: `${dupeRuns.toLocaleString()} repeat runs of commands that returned what they had already returned.`,
+    turns: dupeRuns, turnTokens: dupeRuns * perTurn,
+    evidence: { repeats: dupeRuns, worst: worstDupe.cmd, worstRepeats: worstDupe.n, perTurn },
+    remedies: remediesFor('dupes', { cmd: worstDupe.cmd, n: worstDupe.n }, tc),
+  });
+
+  const cov = Math.round(carry.coverage * 100);
+  for (const e of carry.byBase.slice(0, 3)) {
+    if (!e.carried || !e.out) continue;
+    F({
+      id: 'carry:' + e.base, kind: 'carry',
+      title: `${e.base} output is carried for the rest of the session`,
+      detail: `Each token it returns is resent about ${Math.round(e.carried / e.out).toLocaleString()}× as context before the session ends`
+        + ` — ${(e.carried / 1e9).toFixed(1)}B cached tokens across the ${cov}% of calls with per-command timing.`,
+      carried: e.carried,
+      evidence: { base: e.base, outTokens: e.out, carriedTokens: e.carried, multiple: Math.round(e.carried / e.out), calls: e.calls, coveragePct: cov },
+      remedies: remediesFor('carry', { base: e.base }, tc),
+    });
+  }
+
+  for (const e of [...trunc.values()].filter((x) => x.calls >= 20 && x.truncated / x.calls > 0.1)
+    .sort((a, b) => b.truncated - a.truncated).slice(0, 3)) {
+    const avg = Math.round(e.tokens / Math.max(e.calls, 1));
+    F({
+      id: 'trunc:' + e.base, kind: 'waste',
+      title: `${e.base} output is being cut off`,
+      detail: `${e.truncated.toLocaleString()} of ${e.calls.toLocaleString()} calls (${pct(e.truncated, e.calls)}%) hit the output limit — about ${(e.truncated * avg / 1e6).toFixed(1)}M tokens paid for and then discarded, and the answer still incomplete.`,
+      carried: e.truncated * avg,
+      evidence: { base: e.base, truncated: e.truncated, calls: e.calls, ratePct: pct(e.truncated, e.calls), avgOut: avg },
+      remedies: remediesFor('truncation', { base: e.base }, tc),
+    });
+  }
+
+  findings.sort((a, b) => (b.turnTokens - a.turnTokens) || (b.carried - a.carried));
+  return {
+    building: !rollupReady, progress: buildProgress,
+    scope: { sessions: recs.length, toolCalls: calls, billed, perTurn, carryCoveragePct: Math.round(carry.coverage * 100) },
+    findings, toolchain: tc, facets: rollupFacets(),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Toolchain inventory — what remedies are actually available here
+// ---------------------------------------------------------------------------
+// Advice that names a tool you do not have is worse than no advice, so findings
+// are only allowed to suggest what this machine can actually do. Read names, never
+// values: these files hold credentials.
+const cp = require('child_process');
+let toolchainCache = null;
+
+function readJSON(f) {
+  try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch (_) { return null; }
+}
+function listNames(dir, ext) {
+  try {
+    return fs.readdirSync(dir).filter((f) => f.endsWith(ext)).map((f) => f.slice(0, -ext.length));
+  } catch (_) { return []; }
+}
+// fixed argv only, never anything derived from a request
+function tryExec(bin, args) {
+  try {
+    return cp.execFileSync(bin, args, { encoding: 'utf8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (_) { return null; }
+}
+
+function detectToolchain() {
+  if (toolchainCache && Date.now() - toolchainCache.at < 5 * 60 * 1000) return toolchainCache.data;
+  const home = os.homedir();
+  const out = { filters: null, mcpServers: [], agents: [], skills: [], hooks: [], plugins: [] };
+
+  // an output-filtering proxy, if one is installed (rtk is the one this project
+  // knows by name; absence just means those remedies are not offered)
+  const ver = tryExec('rtk', ['--version']);
+  if (ver) {
+    const help = tryExec('rtk', ['--help']) || '';
+    const cmds = help.split('\n')
+      .map((l) => /^\s{2}([a-z][a-z0-9-]*)\s{2,}\S/.exec(l))
+      .filter(Boolean).map((m) => m[1]);
+    // `rtk --version` already prints "rtk 0.43.0" — do not repeat the name
+    out.filters = { tool: 'rtk', version: ver.trim().replace(/^rtk\s+/, ''), commands: cmds };
+  }
+
+  for (const f of [path.join(home, '.claude/settings.json'), path.join(process.cwd(), '.claude/settings.json')]) {
+    const j = readJSON(f);
+    if (!j) continue;
+    for (const [evt, arr] of Object.entries(j.hooks || {})) {
+      for (const h of arr || []) {
+        out.hooks.push({ event: evt, matcher: h.matcher || '*', runs: (h.hooks || []).map((x) => x.command).join('; ') });
+      }
+    }
+    for (const p of Object.keys(j.enabledPlugins || {})) out.plugins.push(p);
+  }
+
+  const seen = new Set();
+  for (const f of [path.join(home, '.claude.json'), path.join(process.cwd(), '.mcp.json')]) {
+    const j = readJSON(f);
+    if (!j) continue;
+    for (const n of Object.keys(j.mcpServers || {})) seen.add(n);
+    for (const proj of Object.values(j.projects || {})) {
+      for (const n of Object.keys((proj && proj.mcpServers) || {})) seen.add(n);
+    }
+  }
+  out.mcpServers = [...seen];
+
+  for (const d of [path.join(home, '.claude/agents'), path.join(process.cwd(), '.claude/agents')]) {
+    out.agents.push(...listNames(d, '.md'));
+  }
+  for (const d of [path.join(home, '.claude/skills'), path.join(process.cwd(), '.claude/skills')]) {
+    try { out.skills.push(...fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)); }
+    catch (_) {}
+  }
+  out.agents = [...new Set(out.agents)];
+  out.skills = [...new Set(out.skills)];
+
+  toolchainCache = { at: Date.now(), data: out };
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // SSE plumbing
 // ---------------------------------------------------------------------------
 const sseClients = new Set();
@@ -1113,6 +1362,18 @@ const server = http.createServer((req, res) => {
     const includeSub = q.get('subagents') !== '0';   // default: include
     if (!rollupReady) return json(res, 200, { building: true, progress: buildProgress });
     return json(res, 200, economy(sinceMs, includeSub, q.get('model') || '', q.get('effort') || '',
+      q.get('source') || '', q.get('repo') || ''));
+  }
+
+  // the same slice as /api/economy, read as "what should I change"
+  if (pathn === '/api/advice') {
+    ensureRollups();
+    const q = url.searchParams;
+    const range = q.get('range') || 'all';
+    const sinceMs = range === '7d' ? 7 * 864e5 : range === '30d' ? 30 * 864e5 : 0;
+    const includeSub = q.get('subagents') !== '0';
+    if (!rollupReady) return json(res, 200, { building: true, progress: buildProgress });
+    return json(res, 200, advice(sinceMs, includeSub, q.get('model') || '', q.get('effort') || '',
       q.get('source') || '', q.get('repo') || ''));
   }
 

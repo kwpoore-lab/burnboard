@@ -27,7 +27,8 @@ each session badged by which agent ran it.
 - **Agents** — the same spend cut by *who* spent it, so agent types can be compared on
   efficiency rather than volume.
 - **Economy** — a token-waste audit: which commands dump the most output back into context,
-  truncation hits, polling/wait round-trips, and commands re-run unchanged.
+  truncation hits, polling/wait round-trips, and commands re-run unchanged — plus ranked findings
+  on what to change, grounded in the tooling you actually have.
 
 It also corrects for quirks the raw numbers don't show — Codex's token counter resetting on
 context compaction, `total_token_usage` under-counting long sessions, UTC timestamps, JS-wrapped
@@ -186,6 +187,22 @@ Expand a row for:
 "Where do the tokens go, and what looks wasteful?" — aggregated over all sessions (All time /
 30 days / 7 days; subagents included by default).
 
+**What to change** sits above the evidence: findings derived from the same slice, ranked by what
+they actually cost. The unit of cost is the *turn*, not the byte — every tool call resends the
+context, so removing one poll is worth far more than trimming what a command prints. Findings
+therefore report two currencies and never add them together: turns billed at full context price,
+and output carried as cached context for the rest of the session.
+
+Remedies are grounded in what this machine actually has. burnboard detects the local toolchain —
+an output-filtering proxy if one is installed, MCP server names, subagent definitions, skills and
+plugins, and the Bash hooks in `settings.json` — and only suggests what you can act on. It reads
+names, never values, since those files hold credentials. No model is involved: every number is
+computed from your own history, so nothing is invented.
+
+Carried-context figures are exact over the calls that still have per-command timestamps (the
+coverage is stated inline) and the per-turn cost is a per-session average, which understates
+polls because they cluster late in a session when the context is largest.
+
 - **Headline cards**: total command-output tokens read back into context, results truncated at
   the output limit, polling/waiting round-trips (empty `write_stdin` / `wait` / bare
   `exec_command`) as a count and % of all tool calls, and redundant re-runs of unchanged
@@ -250,6 +267,7 @@ is source-agnostic and simply carries a `source` tag through to the UI.
 | `GET /api/command?base=&period=…&from=&to=` | one command's series, samples and poll targets |
 | `GET /api/agents?range=all\|30d\|7d&by=agent\|role\|model\|effort\|project` | per-agent-type spend, efficiency rates and command-class mix |
 | `GET /api/economy?range=all\|30d\|7d&subagents=0\|1&source=codex\|claude` | token-economy signals from the same rollups |
+| `GET /api/advice?range=&subagents=&model=&effort=&source=&repo=` | findings for the same slice as `/api/economy`, plus the detected toolchain |
 | `GET /api/facets` | the model / effort / repo values the filters offer |
 
 Every session record carries `source` (`"codex"` or `"claude"`). The aggregate endpoints accept

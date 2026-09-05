@@ -271,6 +271,27 @@
   .cmdlink { cursor: pointer; border-bottom: 1px dotted currentColor; }
   .cmdlink:hover { color: var(--fg); }
 
+  /* findings — what to change, above the evidence for it */
+  .fsec { font-size: 12px; text-transform: uppercase; letter-spacing: .9px; color: var(--dim);
+    margin: 18px 0 8px; font-weight: 600; }
+  .fsec:first-child { margin-top: 4px; }
+  .findbar { display: flex; gap: 14px; flex-wrap: wrap; align-items: baseline; font-size: 12px;
+    color: var(--dim); background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 12px; margin-bottom: 10px; }
+  .findbar b { color: var(--fg); font-family: var(--mono); }
+  .findbar .have { margin-left: auto; font-family: var(--mono); font-size: 11px; opacity: .8; }
+  .finding { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--dim);
+    border-radius: 6px; padding: 10px 13px; margin-bottom: 8px; }
+  .finding.turns { border-left-color: var(--red); }
+  .finding.carry { border-left-color: var(--yellow); }
+  .finding.waste { border-left-color: var(--purple); }
+  .f-head { display: flex; gap: 12px; align-items: baseline; }
+  .f-title { font-weight: 600; font-size: 13.5px; }
+  .f-cost { margin-left: auto; font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+  .f-unit { color: var(--dim); font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; }
+  .f-detail { color: var(--fg); font-size: 12.5px; margin-top: 4px; line-height: 1.5; }
+  .f-fix { margin: 6px 0 0; padding-left: 18px; color: var(--dim); font-size: 12px; line-height: 1.6; }
+
   /* economy */
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin: 4px 0 18px; }
   .ecard { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
@@ -2231,9 +2252,12 @@ $('#agBy').addEventListener('click', (e) => {
 });
 $('#agSub').addEventListener('change', (e) => { agSub = e.target.checked; loadAgents(); });
 
+let adviceData = null;
+
 async function loadEconomy() {
   const el = $('#economy');
-  const r = await fetch(`/api/economy?range=${ecoRange}&subagents=${ecoSub ? 1 : 0}${facetQS(ecoModel, ecoEffort)}`).then(x => x.json());
+  const qs = `range=${ecoRange}&subagents=${ecoSub ? 1 : 0}${facetQS(ecoModel, ecoEffort)}`;
+  const r = await fetch(`/api/economy?${qs}`).then(x => x.json());
   if (r.building) {
     const p = r.progress || {};
     el.innerHTML = `<div class="empty">Building rollup cache… ${p.done || 0} / ${p.total || '?'} sessions</div>`;
@@ -2244,6 +2268,44 @@ async function loadEconomy() {
   fillFacet($('#ecoModel'), r.facets && r.facets.models, ecoModel, 'all models', true);
   fillFacet($('#ecoEffort'), r.facets && r.facets.efforts, ecoEffort, 'all efforts');
   renderEconomy();
+  // findings describe the same slice, so they follow the same filters
+  adviceData = null;
+  fetch(`/api/advice?${qs}`).then(x => x.json()).then(a => {
+    if (a.building) return;
+    adviceData = a;
+    const host = $('#findings');
+    if (host) host.innerHTML = findingsHTML(a);
+  }).catch(() => {});
+}
+
+// What to change, ranked. Turn cost and carried context are different
+// currencies — full price vs cache rate — so they are never summed.
+function findingsHTML(a) {
+  if (!a.findings.length) return '<p class="blurb">Nothing worth flagging in this slice.</p>';
+  const tc = a.toolchain || {};
+  const have = [
+    tc.filters ? `${tc.filters.tool} ${tc.filters.version}` : null,
+    tc.mcpServers.length ? `MCP: ${tc.mcpServers.join(', ')}` : null,
+    tc.agents.length ? `agents: ${tc.agents.join(', ')}` : 'no subagents defined',
+    tc.hooks.length ? `hook: ${tc.hooks.map(h => h.matcher + '→' + h.runs).join(', ')}` : null,
+  ].filter(Boolean).join(' · ');
+
+  return `<div class="findbar">
+      <span>Ranked by what they cost. One tool call bills about
+      <b>${kfmtN(a.scope.perTurn)}</b> tokens of resent context, so a turn removed is worth
+      far more than a byte trimmed.</span>
+      <span class="have">detected — ${esc(have)}</span>
+    </div>
+    ${a.findings.map(f => `<div class="finding ${f.kind}">
+      <div class="f-head">
+        <span class="f-title">${esc(f.title)}</span>
+        <span class="f-cost">${f.turnTokens
+          ? `~${kfmtN(f.turnTokens)} <span class="f-unit">full price · ${fmt(f.turns)} turns</span>`
+          : `~${kfmtN(f.carried)} <span class="f-unit">cached context</span>`}</span>
+      </div>
+      <div class="f-detail">${esc(f.detail)}</div>
+      <ul class="f-fix">${f.remedies.map(r => `<li>${esc(r)}</li>`).join('')}</ul>
+    </div>`).join('')}`;
 }
 
 function renderEconomy() {
@@ -2252,6 +2314,9 @@ function renderEconomy() {
   const sessLink = (s) => `openDetail('${s.sessionId}')`;
 
   $('#economy').innerHTML = `
+    <h3 class="fsec">What to change</h3>
+    <div id="findings">${adviceData ? findingsHTML(adviceData) : '<p class="blurb">Reading the slice…</p>'}</div>
+    <h3 class="fsec">The evidence</h3>
     <div class="cards">
       <div class="ecard">
         <div class="big">${kfmtN(t.outTokens)}</div>
