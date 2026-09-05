@@ -47,6 +47,10 @@ node server.js            # -> http://localhost:4317
 
 Options: `--port 8080`, `--root /path/to/.codex`, `--claude-root /path/to/.claude`.
 
+The page is read fresh on every request, so UI changes only need a browser reload — but the
+server holds its routes in memory. After pulling a new version, restart the process, or a page
+built against new endpoints will sit waiting on routes the running server answers with 404.
+
 ### Finding your data
 
 On startup burnboard locates each agent's home directory and prints what it found. Either source
