@@ -37,6 +37,11 @@ const IDLE_MS = 5 * 60 * 1000; // yellow dot
 const createCodexSource = require('./lib/sources/codex');
 const createClaudeSource = require('./lib/sources/claude');
 const SOURCES = [createCodexSource({ argVal }), createClaudeSource({ argVal })];
+// Per-command timestamps are only retained for the recent past (the sources drop
+// older ones to keep the rollup cache small), so a drill-down below a day can
+// only be bucketed by command time inside this window. Older sub-day ranges fall
+// back to bucketing each session at its start, the way day/week/month do.
+const CMD_DETAIL_MS = Math.min(...SOURCES.map((s) => s.recentCmdMs || 24 * 3600 * 1000));
 const SOURCE_BY_ID = new Map(SOURCES.map((s) => [s.id, s]));
 
 // ---------------------------------------------------------------------------
@@ -220,6 +225,7 @@ function decorate(sum, full) {
     project: sum.project,
     cwd: sum.cwd,
     git: sum.git,
+    repoKey: repoKeyFrom(sum.git && sum.git.repo, sum.cwd, sum.project),
     originator: sum.originator,
     cliVersion: sum.cliVersion,
     startedAt: sum.startedAt,
@@ -379,7 +385,11 @@ async function refreshRollups() {
       buildProgress.done++;
     }
     for (const id of [...rollupCache.sessions.keys()]) if (!live.has(id)) rollupCache.sessions.delete(id);
-    if (changed) { saveRollupCache(); console.log(`  rollups: ${changed} sessions (re)scanned, ${rollupCache.sessions.size} total`); }
+    if (changed) {
+      forgetRepoKeys();
+      saveRollupCache();
+      console.log(`  rollups: ${changed} sessions (re)scanned, ${rollupCache.sessions.size} total`);
+    }
     rollupReady = true;
   } finally {
     building = false;
@@ -406,37 +416,140 @@ function bucketKey(period, iso) {
     t.setDate(t.getDate() - ((t.getDay() + 6) % 7));      // back to Monday
     return `${t.getFullYear()}-${p2(t.getMonth() + 1)}-${p2(t.getDate())}`;
   }
-  if (period === 'hour') {   // the finest filter = even 5-minute slots
+  if (period === 'hourly') return `${ymd}T${p2(d.getHours())}`;
+  if (period === 'hour' || period === 'slot') {   // the finest filter = even 5-minute slots
     const q = Math.floor(d.getMinutes() / HOUR_SLOT_MIN) * HOUR_SLOT_MIN;
     return `${ymd}T${p2(d.getHours())}:${p2(q)}`;
   }
   return ymd;
 }
 
+// Periods finer than a day place each *command* in the slot it ran in; the
+// coarser ones bucket a session's whole total at its start time.
+const CMD_TIME_PERIODS = new Set(['hour', 'hourly', 'slot']);
+const PERIODS = ['month', 'week', 'day', 'hourly', 'slot', 'hour'];
+
+// A sub-day range can only be bucketed by command time while the sources still
+// hold per-command timestamps for it.
+const hasCmdTimes = (from) => from == null || from >= Date.now() - CMD_DETAIL_MS;
+
+// ?from=&to= (epoch ms) scope a chart drill-down to one clicked bucket
+function drillRange(q) {
+  const from = Number(q.get('from')), to = Number(q.get('to'));
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return [null, null];
+  return [from, to];
+}
+
+// Every bucket between two instants, so a drilled-into range shows its empty
+// slots instead of silently closing the gaps.
+function seedRange(period, from, to) {
+  if (from == null || !isFinite(to)) return [];
+  const d = new Date(from);
+  if (period === 'month') { d.setDate(1); d.setHours(0, 0, 0, 0); }
+  else if (period === 'week' || period === 'day') d.setHours(0, 0, 0, 0);
+  else if (period === 'hourly') d.setMinutes(0, 0, 0);
+  else { d.setSeconds(0, 0); d.setMinutes(Math.floor(d.getMinutes() / HOUR_SLOT_MIN) * HOUR_SLOT_MIN); }
+  const out = [];
+  for (let guard = 0; d.getTime() < to && guard < 4000; guard++) {
+    out.push(bucketKey(period, d));
+    if (period === 'month') d.setMonth(d.getMonth() + 1);
+    else if (period === 'week') d.setDate(d.getDate() + 7);
+    else if (period === 'day') d.setDate(d.getDate() + 1);
+    else if (period === 'hourly') d.setHours(d.getHours() + 1);
+    else d.setMinutes(d.getMinutes() + HOUR_SLOT_MIN);
+  }
+  return out;
+}
+
 // distinct model / effort values for the filter dropdowns
 function rollupFacets() {
-  const models = new Set(), efforts = new Set();
+  const models = new Set(), efforts = new Set(), repos = new Set();
   for (const r of rollupCache.sessions.values()) {
     if (r.model) models.add(r.model);
     if (r.autoReview) models.add('codex-auto-review');
     if (r.effort) efforts.add(r.effort);
+    const rk = repoKeyOf(r);
+    if (rk) repos.add(rk);
   }
   const order = { minimal: 0, low: 1, medium: 2, high: 3, xhigh: 4 };
   return {
     models: [...models].sort(),
     efforts: [...efforts].sort((a, b) => (order[a] ?? 9) - (order[b] ?? 9)),
+    repos: [...repos].sort(),
     sources: SOURCES.map((s) => ({ id: s.id, label: s.label })),
   };
 }
 
+// ---------------------------------------------------------------------------
+// Which repo a session belongs to
+// ---------------------------------------------------------------------------
+// Sessions run inside a git worktree report the worktree directory, so a naive
+// filter lists every branch folder as its own repo. Fold those back into the
+// checkout they belong to: <repo>/.codex/worktrees/<branch> -> <repo>.
+const WORKTREE_DIR = /^(.*?)\/(?:\.[^/]+\/)?worktrees\/[^/]+\/?$/;
+const topLevelDir = (cwd) => {
+  const m = WORKTREE_DIR.exec(cwd || '');
+  return m ? m[1] : (cwd || '');
+};
+
+// A checkout's directory name is not the repo name ("sonde" vs "sondeinc/sonde"),
+// but sessions that *did* report a remote from the same directory tell us what it
+// is called. Learn that mapping from the rollups rather than guessing.
+let repoAlias = null;
+function repoAliases() {
+  if (repoAlias) return repoAlias;
+  // the live snapshot can ask before the rollups have loaded — answer with what we
+  // have and leave the real map to be built (and cached) once they are there
+  if (!rollupCache) return new Map();
+  repoAlias = new Map();
+  for (const r of rollupCache.sessions.values()) if (r.repo && r.project) repoAlias.set(r.project, r.repo);
+  return repoAlias;
+}
+
+function repoKeyFrom(repo, cwd, project) {
+  if (repo) return repo;
+  const dir = topLevelDir(cwd);
+  const name = dir ? path.basename(dir) : (project || '');
+  return repoAliases().get(name) || name || null;
+}
+
+// The rollup record keeps only the directory's basename, which is not enough to
+// spot a worktree. The full cwd is in the session file's opening metadata, so
+// read just the head of it — and only for the few sessions that reported no
+// remote of their own.
+function sessionCwd(rec) {
+  try {
+    const fd = fs.openSync(rec.file, 'r');
+    const buf = Buffer.alloc(65536);
+    const len = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    for (const line of buf.slice(0, len).toString('utf8').split('\n').slice(0, 8)) {
+      if (!line) continue;
+      let o; try { o = JSON.parse(line); } catch (_) { continue; }
+      const cwd = (o.payload && o.payload.cwd) || o.cwd;
+      if (cwd) return cwd;
+    }
+  } catch (_) {}
+  return null;
+}
+
+const repoKeyMemo = new Map();
+function repoKeyOf(r) {
+  if (r.repo) return r.repo;
+  if (!repoKeyMemo.has(r.id)) repoKeyMemo.set(r.id, repoKeyFrom(null, sessionCwd(r), r.project));
+  return repoKeyMemo.get(r.id);
+}
+const forgetRepoKeys = () => { repoKeyMemo.clear(); repoAlias = null; };
+
 // filter helper shared by trends / economy / commandTrend
-function pickSessions(includeSub, model, effort, source) {
+function pickSessions(includeSub, model, effort, source, repo) {
   return [...rollupCache.sessions.values()].filter((r) =>
     r.startedAt
     && (includeSub || !r.isSubagent)
     && (!model || r.model === model || (model === 'codex-auto-review' && r.autoReview))
     && (!effort || r.effort === effort)
-    && (!source || r.source === source));
+    && (!source || r.source === source)
+    && (!repo || repoKeyOf(r) === repo));
 }
 
 // The "hour" (5-minute) view covers the last hour. A session that started
@@ -449,12 +562,12 @@ function windowSessions(recs, period) {
     || (r.recentCmds || []).some((c) => Date.parse(c.t) >= cutoff));
 }
 
-// commands run inside the hour window, newest sessions included
-function* hourCommands(recs, base) {
-  const cutoff = Date.now() - HOUR_WINDOW_MS;
+// commands that ran inside [from, to), newest sessions included
+function* rangeCommands(recs, base, from, to) {
   for (const r of recs) {
     for (const c of r.recentCmds || []) {
-      if (Date.parse(c.t) < cutoff) continue;
+      const t = Date.parse(c.t);
+      if (!(t >= from && t < to)) continue;
       if (base && c.b !== base) continue;
       yield [r, c];
     }
@@ -474,21 +587,22 @@ function hourWindowBuckets() {
   }
   return out;
 }
-const seedBuckets = (period) => new Set(period === 'hour' ? hourWindowBuckets() : []);
+const seedBuckets = (period, from, to) => new Set(
+  period === 'hour' ? hourWindowBuckets() : seedRange(period, from, to));
 
-// Every other period buckets a session's whole total at its start time, which
-// is useless at this scale — an hour of work would be one bar an hour ago. Here
-// each command lands in the slot it actually ran in. The per-request token
-// breakdown (in/cached/out) is only known per session, so it is left out.
-function hourTrends(recs) {
-  const buckets = seedBuckets('hour');
+// Bucketing a session's whole total at its start time is useless below a day —
+// an hour of work would be one bar an hour ago. Here each command lands in the
+// slot it actually ran in. The per-request token breakdown (in/cached/out) is
+// only known per session, so it is left out.
+function cmdTimeTrends(recs, period, from, to) {
+  const buckets = seedBuckets(period, from, to);
   const totals = {};
   const cmdMap = new Map();
   const promptMap = new Map();
   const seenInBucket = {};
   const sessionIds = new Set();
-  for (const [r, c] of hourCommands(recs)) {
-    const b = bucketKey('hour', c.t);
+  for (const [r, c] of rangeCommands(recs, null, from, to)) {
+    const b = bucketKey(period, c.t);
     buckets.add(b);
     const T = totals[b] || (totals[b] = { tokens: 0, sessions: 0, commands: 0 });
     T.tokens += c.k; T.commands++;
@@ -518,7 +632,7 @@ function hourTrends(recs) {
   }, {});
   grand.sessions = sessionIds.size;
   return {
-    period: 'hour',
+    period,
     byCommandTime: true,
     building: !rollupReady,
     progress: buildProgress,
@@ -532,10 +646,17 @@ function hourTrends(recs) {
   };
 }
 
-function trends(period, includeSub, model, effort, source) {
-  const recs = windowSessions(pickSessions(includeSub, model, effort, source), period);
-  if (period === 'hour') return hourTrends(recs);
-  const buckets = seedBuckets(period);
+function trends(period, includeSub, model, effort, source, from, to, repo) {
+  let recs = windowSessions(pickSessions(includeSub, model, effort, source, repo), period);
+  if (CMD_TIME_PERIODS.has(period) && hasCmdTimes(from)) {
+    const lo = from == null ? Date.now() - HOUR_WINDOW_MS : from;
+    return cmdTimeTrends(recs, period, lo, to == null ? Infinity : to);
+  }
+  if (from != null) recs = recs.filter((r) => {
+    const t = Date.parse(r.startedAt);
+    return t >= from && t < to;
+  });
+  const buckets = seedBuckets(period, from, to);
   const totals = {};
   const cmdMap = new Map();
   const promptMap = new Map();
@@ -618,9 +739,9 @@ const AGENT_KEYS = {
   project: (r) => r.project || '–',
 };
 
-function agents(sinceMs, includeSub, source, groupBy) {
+function agents(sinceMs, includeSub, source, groupBy, repo) {
   const cutoff = sinceMs ? Date.now() - sinceMs : 0;
-  const recs = pickSessions(includeSub, '', '', source).filter((r) =>
+  const recs = pickSessions(includeSub, '', '', source, repo).filter((r) =>
     !cutoff || new Date(r.startedAt).getTime() >= cutoff);
   const keyOf = AGENT_KEYS[groupBy] || AGENT_KEYS.agent;
 
@@ -703,9 +824,9 @@ function agents(sinceMs, includeSub, source, groupBy) {
 }
 
 // "Where are the tokens going, and what looks wasteful?"
-function economy(sinceMs, includeSub, model, effort, source) {
+function economy(sinceMs, includeSub, model, effort, source, repo) {
   const cutoff = sinceMs ? Date.now() - sinceMs : 0;
-  const recs = pickSessions(includeSub, model, effort, source).filter((r) =>
+  const recs = pickSessions(includeSub, model, effort, source, repo).filter((r) =>
     !cutoff || new Date(r.startedAt).getTime() >= cutoff);
 
   const tot = { sessions: recs.length, outTokens: 0, toolCalls: 0, pollTurns: 0,
@@ -777,8 +898,8 @@ function economy(sinceMs, includeSub, model, effort, source) {
 // per day|week|month bucket, plus per-invocation and per-polled-process series.
 // same idea as hourTrends: at 5-minute resolution a command belongs in the slot
 // it ran in, not in its session's start slot
-function hourCommandTrend(base, recs) {
-  const buckets = seedBuckets('hour');
+function cmdTimeCommandTrend(base, recs, period, from, to) {
+  const buckets = seedBuckets(period, from, to);
   const series = { outTokens: {}, calls: {}, truncated: {}, delta: {} };
   const bump = (k, b, v) => { series[k][b] = (series[k][b] || 0) + v; };
   const sampMap = new Map();
@@ -791,8 +912,8 @@ function hourCommandTrend(base, recs) {
     const pb = e.per[b] || (e.per[b] = { outTokens: 0, calls: 0, truncated: 0 });
     pb.outTokens += c.o; pb.calls++; pb.truncated += c.tr;
   };
-  for (const [r, c] of hourCommands(recs, base)) {
-    const b = bucketKey('hour', c.t);
+  for (const [r, c] of rangeCommands(recs, base, from, to)) {
+    const b = bucketKey(period, c.t);
     buckets.add(b);
     sessionIds.add(r.id);
     bump('outTokens', b, c.o); bump('calls', b, 1); bump('truncated', b, c.tr); bump('delta', b, c.k);
@@ -804,7 +925,7 @@ function hourCommandTrend(base, recs) {
   totals.sessions = sessionIds.size;
   return {
     base,
-    period: 'hour',
+    period,
     byCommandTime: true,
     buckets: [...buckets].sort(),
     series,
@@ -815,10 +936,17 @@ function hourCommandTrend(base, recs) {
   };
 }
 
-function commandTrend(base, period, includeSub, model, effort, source) {
-  const recs = windowSessions(pickSessions(includeSub, model, effort, source), period);
-  if (period === 'hour') return hourCommandTrend(base, recs);
-  const buckets = seedBuckets(period);
+function commandTrend(base, period, includeSub, model, effort, source, from, to, repo) {
+  let recs = windowSessions(pickSessions(includeSub, model, effort, source, repo), period);
+  if (CMD_TIME_PERIODS.has(period) && hasCmdTimes(from)) {
+    const lo = from == null ? Date.now() - HOUR_WINDOW_MS : from;
+    return cmdTimeCommandTrend(base, recs, period, lo, to == null ? Infinity : to);
+  }
+  if (from != null) recs = recs.filter((r) => {
+    const t = Date.parse(r.startedAt);
+    return t >= from && t < to;
+  });
+  const buckets = seedBuckets(period, from, to);
   const series = { outTokens: {}, calls: {}, truncated: {}, delta: {} };
   const bump = (k, b, v) => { series[k][b] = (series[k][b] || 0) + v; };
   const sampMap = new Map();
@@ -934,13 +1062,22 @@ const server = http.createServer((req, res) => {
     return json(res, 200, t);
   }
 
+  // the header's repo picker needs the list before any tab has loaded
+  if (pathn === '/api/facets') {
+    ensureRollups();
+    if (!rollupReady) return json(res, 200, { building: true, progress: buildProgress });
+    return json(res, 200, rollupFacets());
+  }
+
   if (pathn === '/api/trends') {
     ensureRollups();
     const q = url.searchParams;
-    const period = ['hour', 'day', 'week', 'month'].includes(q.get('period')) ? q.get('period') : 'day';
+    const period = PERIODS.includes(q.get('period')) ? q.get('period') : 'day';
     const includeSub = q.get('subagents') === '1';
+    const [from, to] = drillRange(q);
     if (!rollupReady) return json(res, 200, { building: true, progress: buildProgress });
-    return json(res, 200, trends(period, includeSub, q.get('model') || '', q.get('effort') || '', q.get('source') || ''));
+    return json(res, 200, trends(period, includeSub, q.get('model') || '', q.get('effort') || '',
+      q.get('source') || '', from, to, q.get('repo') || ''));
   }
 
   if (pathn === '/api/history') {
@@ -955,7 +1092,7 @@ const server = http.createServer((req, res) => {
         title: r.title || ((SOURCE_BY_ID.get(r.source) || {}).titleFor ? SOURCE_BY_ID.get(r.source).titleFor(r.id) : null),
         prompt: r.prompt,
         project: r.project,
-        repo: r.repo, branch: r.branch,
+        repo: r.repo, repoKey: repoKeyOf(r), branch: r.branch,
         model: r.model, effort: r.effort, autoReview: r.autoReview,
         isSubagent: r.isSubagent, agentNickname: r.agentNickname, depth: r.depth,
         agentKind: r.agentKind, parentId: r.parentId,
@@ -975,7 +1112,8 @@ const server = http.createServer((req, res) => {
     const sinceMs = q.get('range') === '7d' ? 7 * 864e5 : q.get('range') === '30d' ? 30 * 864e5 : 0;
     const includeSub = q.get('subagents') !== '0';   // default: include
     if (!rollupReady) return json(res, 200, { building: true, progress: buildProgress });
-    return json(res, 200, economy(sinceMs, includeSub, q.get('model') || '', q.get('effort') || '', q.get('source') || ''));
+    return json(res, 200, economy(sinceMs, includeSub, q.get('model') || '', q.get('effort') || '',
+      q.get('source') || '', q.get('repo') || ''));
   }
 
   if (pathn === '/api/agents') {
@@ -985,18 +1123,20 @@ const server = http.createServer((req, res) => {
     const includeSub = q.get('subagents') !== '0';
     const groupBy = ['agent', 'role', 'model', 'effort', 'project'].includes(q.get('by')) ? q.get('by') : 'agent';
     if (!rollupReady) return json(res, 200, { building: true, progress: buildProgress });
-    return json(res, 200, agents(sinceMs, includeSub, q.get('source') || '', groupBy));
+    return json(res, 200, agents(sinceMs, includeSub, q.get('source') || '', groupBy, q.get('repo') || ''));
   }
 
   if (pathn === '/api/command') {
     ensureRollups();
     const q = url.searchParams;
     const base = q.get('base');
-    const period = ['hour', 'day', 'week', 'month'].includes(q.get('period')) ? q.get('period') : 'week';
+    const period = PERIODS.includes(q.get('period')) ? q.get('period') : 'week';
     const includeSub = q.get('subagents') !== '0';
+    const [from, to] = drillRange(q);
     if (!base) return json(res, 400, { error: 'base required' });
     if (!rollupReady) return json(res, 200, { building: true, progress: buildProgress });
-    return json(res, 200, commandTrend(base, period, includeSub, q.get('model') || '', q.get('effort') || '', q.get('source') || ''));
+    return json(res, 200, commandTrend(base, period, includeSub, q.get('model') || '', q.get('effort') || '',
+      q.get('source') || '', from, to, q.get('repo') || ''));
   }
 
   res.writeHead(404, { 'Content-Type': 'text/plain' });

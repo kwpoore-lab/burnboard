@@ -113,9 +113,13 @@
     vertical-align: top; }
   th { color: var(--dim); font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
   tr:hover td { background: var(--panel); }
+  tr.trow, tr.ctrow { cursor: pointer; }
+  tr.trow.on > td, tr.ctrow.on > td { background: rgba(88, 166, 255, .14); }
+  tr.trow.on > td:first-child, tr.ctrow.on > td:first-child { box-shadow: inset 3px 0 0 -1px var(--accent); }
   .num { font-family: var(--mono); text-align: right; white-space: nowrap; }
   td.cmd { font-family: var(--mono); font-size: 11px; word-break: break-all; }
-  td.base { font-family: var(--mono); color: var(--accent); white-space: nowrap; }
+  td.base { font-family: var(--mono); color: var(--accent); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
   .cmdscroll { max-height: 360px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
 
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
@@ -184,33 +188,83 @@
   @media (max-width: 1000px) { .tcols { grid-template-columns: 1fr; } }
   .tfilter { width: 100%; margin: 4px 0 8px; }
   .trow-detail td { background: var(--panel2); }
+  .trow-detail > td { max-width: 0; }
+  .tcols > div { min-width: 0; }
+  /* The name column takes whatever the numbers do not, and a long command
+     ellipsizes inside it — otherwise one mcp__… name shoves the whole table
+     past its half of the grid. Fixed layout also stops the expanded detail
+     row from widening the table. */
+  #cmdTable > table, #promptTable > table { table-layout: fixed; }
+  #cmdTable > table th:nth-child(2), #promptTable > table th:nth-child(2) { width: 116px; }
+  #cmdTable > table th:nth-child(3), #promptTable > table th:nth-child(3) { width: 62px; }
+  #cmdTable > table th:nth-child(4), #promptTable > table th:nth-child(4) { width: 138px; }
   .trend-cell { width: 130px; }
   .spark { display: block; }
   .spark rect { fill: var(--accent); }
-  .lbl-row td { font-size: 11px; color: var(--dim); font-family: var(--mono); }
 
   /* HTML bar chart (no SVG text distortion) */
-  .bchart { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px;
-    padding: 8px 10px 4px; margin: 8px 0; }
+  .bchart { --ph: 108px; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px 4px; margin: 8px 0; }
+  /* once you have drilled past a level it is context, not the subject — shrink it
+     to a third so the level you are actually looking at gets the room */
+  .bchart.drilled { --ph: 34px; opacity: .75; }
+  .bchart.drilled:hover { opacity: 1; }
   .bc-title { font: 11px/1.4 var(--mono); color: var(--dim); margin-bottom: 5px; }
   .bc-title .bc-l2 { color: var(--purple); }
   .bc-body { display: flex; gap: 6px; }
-  .bc-yax { display: flex; flex-direction: column; justify-content: space-between; width: 46px;
-    height: 150px; font: 10px/1 var(--mono); color: var(--dim); text-align: right; flex: none; }
+  .bc-yax { display: flex; flex-direction: column; justify-content: space-between; width: 42px;
+    height: var(--ph); font: 9.5px/1 var(--mono); color: var(--dim); opacity: .7;
+    text-align: right; flex: none; }
   .bc-scroll { flex: 1 1 0; min-width: 0; overflow-x: auto; overflow-y: hidden; }
+  .bc-inner { --bw: 6px; }   /* overridden per chart from the bucket count */
   .bc-plot { position: relative; display: flex; align-items: flex-end; gap: 1px;
-    justify-content: flex-start; height: 150px; border-bottom: 1px solid var(--border);
-    background: repeating-linear-gradient(to top, transparent 0, transparent calc(25% - 1px), var(--border) calc(25% - 1px), var(--border) 25%); }
-  /* bars share the plot evenly and sit a pixel apart — no dead space between them */
-  .bc-bar { flex: 1 1 0; min-width: 2px; min-height: 1px; background: var(--accent); opacity: .8;
+    justify-content: flex-start; height: var(--ph); border-bottom: 1px solid var(--border);
+    background: repeating-linear-gradient(to top, transparent 0, transparent calc(50% - 1px), var(--border) calc(50% - 1px), var(--border) 50%); }
+  /* narrow fixed-width bars a pixel apart — the chart is as wide as it needs to be,
+     not as wide as the panel, so a short series stays compact. Each bar sits in a
+     full-height column so a 6px bar still has a comfortable click target. */
+  .bc-col { flex: none; width: var(--bw); height: 100%; display: flex; align-items: flex-end; }
+  .bc-bar { width: 100%; min-height: 1px; background: var(--accent); opacity: .8;
     border-radius: 1px 1px 0 0; }
-  .bc-bar:hover { opacity: 1; }
+  .bc-plot.pick .bc-col { cursor: pointer; }
+  .bc-plot.pick .bc-col:hover { background: rgba(88, 166, 255, .13); }
+  .bc-plot.pick .bc-col:hover .bc-bar { opacity: 1; }
+  /* the selection tints the whole column, so an empty bucket still reads as picked */
+  .bc-col.sel { background: rgba(210, 153, 34, .22); }
+  .bc-col.sel .bc-bar { background: var(--yellow); opacity: 1; }
   .bc-line { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .bc-line polyline { fill: none; stroke: var(--purple); stroke-width: 1.4; opacity: .5;
     vector-effect: non-scaling-stroke; }
   .bc-xax { display: flex; justify-content: flex-start; gap: 1px; margin-top: 3px;
     font: 9.5px/1 var(--mono); color: var(--dim); }
-  .bc-xax span { flex: 1 1 0; min-width: 0; white-space: nowrap; text-align: center; overflow: visible; }
+  .bc-xax span { flex: none; width: var(--bw); white-space: nowrap; text-align: center; overflow: visible; }
+  .bc-xax span.lead { text-align: left; }
+  .bc-xax span.on { color: var(--yellow); }
+
+  /* the picked bucket, stated above the tables it is filtering */
+  .scopebar { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    background: var(--panel2); border: 1px solid var(--border); border-left: 3px solid var(--yellow);
+    border-radius: 6px; padding: 9px 12px; margin: 10px 0 4px; }
+  .scopebar .when { font-size: 18px; font-weight: 650; letter-spacing: .3px; }
+  .scopebar .what { font-size: 12px; color: var(--dim); font-family: var(--mono); }
+  .scopebar .path { font-size: 11px; color: var(--dim); font-family: var(--mono); margin-left: auto; }
+  .scopebar .path b { color: var(--fg); font-weight: 500; }
+  /* the entity half of the scope: which row the charts are plotting */
+  .scopebar .chip { display: inline-flex; align-items: center; gap: 6px; max-width: 340px;
+    background: var(--panel); border: 1px solid var(--accent); border-radius: 5px;
+    padding: 2px 4px 2px 8px; font: 11px/1.5 var(--mono); color: var(--accent); }
+  .scopebar .chip button { border: 0; background: none; color: inherit; padding: 0 3px;
+    font-size: 13px; line-height: 1; cursor: pointer; }
+  .scopebar .chip button:hover { color: var(--fg); }
+  .scopebar button { background: var(--panel); color: var(--dim); border: 1px solid var(--border);
+    border-radius: 5px; padding: 3px 9px; font: inherit; font-size: 11px; cursor: pointer; }
+  .scopebar button:hover { color: var(--fg); border-color: var(--dim); }
+  .scopebar .undo { font-size: 13px; line-height: 1; padding: 3px 8px; }
+  /* the same escape hatch, sitting at the end of an empty-slice message */
+  button.undo.inline { background: var(--panel2); color: var(--accent); border: 1px solid var(--border);
+    border-radius: 5px; padding: 1px 7px; margin-left: 6px; font: inherit; font-size: 13px;
+    line-height: 1.3; cursor: pointer; vertical-align: baseline; }
+  button.undo.inline:hover { color: var(--fg); border-color: var(--accent); }
   .ct-ctrls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 4px; }
   .ct-ctrls .seg button { padding: 3px 9px; font-size: 11px; }
   select.facet { margin-left: 8px; font-size: 12px; padding: 3px 6px; max-width: 160px; }
@@ -245,7 +299,7 @@
 <header>
   <h1><a href="https://github.com/kwpoore-lab/burnboard" target="_blank" rel="noopener">burnboard</a></h1>
   <nav id="tabs">
-    <a href="#running" data-tab="running" class="on">Prompts running now</a>
+    <a href="#running" data-tab="running" class="on">Activity</a>
     <a href="#history" data-tab="history">History</a>
     <a href="#trends" data-tab="trends">Trends</a>
     <a href="#agents" data-tab="agents">Agents</a>
@@ -254,13 +308,16 @@
   <span class="seg" id="srcSeg" title="which agent's sessions to show">
     <button data-src="" class="on">All agents</button><button data-src="codex" id="srcCodex">Codex</button><button data-src="claude" id="srcClaude">Claude Code</button>
   </span>
+  <select id="repoSel" class="facet" title="which repository's sessions to show">
+    <option value="">all repos</option>
+  </select>
   <span id="conn"></span>
   <span class="stat" id="hdrstat">connecting…</span>
 </header>
 <main>
   <section id="tab-running">
     <div id="usageSummary" class="tgrand" hidden></div>
-    <h2>Prompts running now
+    <h2>Activity
       <span style="float:right;font-weight:400;text-transform:none;letter-spacing:0">
         <button id="livePause" type="button" title="Pause live updates so you can scroll — nothing is lost, updates just queue">⏸ Pause</button>
         sort
@@ -468,7 +525,8 @@ $('#livePause').addEventListener('click', () => {
 function render(snap) {
   lastSnap = snap;
   $('#conn').classList.add('ok');
-  const threads = (snap.threads || []).filter(t => !srcFilter || t.source === srcFilter);
+  const threads = (snap.threads || []).filter(t => (!srcFilter || t.source === srcFilter)
+    && (!repoFilter || t.repoKey === repoFilter));
   const running = threads.filter(t => t.status === 'running');
   const heads = agentLimits(snap).map(l => {
     const w = tightestWindow(l.windows);
@@ -558,6 +616,7 @@ const SRC_LABEL = { codex: 'Codex', claude: 'Claude Code' };
 const SRC_MARK = { codex: OPENAI_MARK, claude: CLAUDE_MARK };
 const srcBadge = (id) => id ? `<span class="badge src-${esc(id)}">${SRC_MARK[id] || ''}${esc(SRC_LABEL[id] || id)}</span>` : '';
 let srcFilter = '';        // '' = all agents | 'codex' | 'claude'
+let repoFilter = '';       // '' = all repos, else a repo name from /api/facets
 let runSort = 'started';   // 'started' | 'tokens', both descending
 let lastRunOrder = [];     // root ids in the order last rendered
 
@@ -795,6 +854,7 @@ function toggleExp(id) {
 }
 function kfmtN(v) {
   if (v == null || isNaN(v)) return '–';
+  if (v >= 1e9) return (v / 1e9).toFixed(1) + 'B';
   if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
   if (v >= 1e3) return (v / 1e3).toFixed(0) + 'k';
   return Math.round(v);
@@ -864,6 +924,7 @@ function consumptionChart(series, H) {
   </svg>`;
 }
 function kfmt(v) {
+  if (v >= 1e9) return (v / 1e9).toFixed(1) + 'B';
   if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
   if (v >= 1e3) return (v / 1e3).toFixed(0) + 'k';
   return Math.round(v);
@@ -883,6 +944,7 @@ let histPoll = null;
 function histFiltered() {
   return histAll.filter(s =>
     (!srcFilter || s.source === srcFilter)
+    && (!repoFilter || s.repoKey === repoFilter)
     && (histSub || !s.isSubagent)
     && (!histModel || s.model === histModel || (histModel === 'codex-auto-review' && s.autoReview))
     && (!histEffort || s.effort === histEffort));
@@ -1135,19 +1197,38 @@ function closeDetail() { $('#overlay').classList.remove('on'); }
 $('#overlay').addEventListener('click', (e) => { if (e.target.id === 'overlay') closeDetail(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetail(); });
 
+// Every chart routes its clicks here: the owning panel registers a handler under
+// the id it passed as opts.pick, and gets back the bucket that was clicked.
+const chartPickers = new Map();
+document.addEventListener('click', (e) => {
+  const col = e.target.closest('.bc-plot.pick .bc-col');
+  if (!col) return;
+  const id = col.closest('.bc-plot').dataset.pick;
+  const fn = chartPickers.get(id.split(':')[0]);
+  if (fn) { e.stopImmediatePropagation(); fn(id, col.dataset.b); }
+});
+
 // ---------------------------------------------------------------------------
 // trends
 // ---------------------------------------------------------------------------
 let trendPeriod = 'day';
 // "Hour" filter = the last couple of hours, rendered as 5-minute bars
 const hourWindowLbl = `last ${HOUR_WINDOW_MS / 3600000}h`;
-const perLbl = (p) => p === 'hour' ? `hour — ${hourWindowLbl}, ${HOUR_SLOT_MIN}m bars` : p;
-const perLblN = (p) => p === 'hour' ? `${HOUR_SLOT_MIN}m bars (${hourWindowLbl})` : p + 's';
+const perLbl = (p) => p === 'hour' ? `hour — ${hourWindowLbl}, ${HOUR_SLOT_MIN}m bars`
+  : p === 'hourly' ? 'hour' : p === 'slot' ? `${HOUR_SLOT_MIN}-minute slot` : p;
+const perLblN = (p) => p === 'hour' ? `${HOUR_SLOT_MIN}m bars (${hourWindowLbl})`
+  : p === 'hourly' ? 'hours' : p === 'slot' ? `${HOUR_SLOT_MIN}m slots` : p + 's';
 let trendSub = false;
 let trendData = null;
+// Drill trail: [0] is whatever the period buttons asked for, and each further
+// level is the bucket clicked in the level above, one granularity finer. The
+// tables read from the deepest level that has a bucket picked.
+let trendTrail = [];
 let trendPoll = null;
 let trModel = '', trEffort = '';
-const tExpanded = { cmd: new Set(), prompt: new Set() };
+// The tables pick *what* is plotted; the chart stack picks *when*. Only one entity
+// at a time — two would need an intersection the rollups do not carry.
+let trendEntity = null;      // { kind: 'cmd' | 'prompt', key }
 
 // populate a <select> with "All …" + options, preserving the current value
 function fillFacet(sel, values, cur, allLabel, isModel) {
@@ -1173,11 +1254,18 @@ function facetMark(sel, model) {
   sel.style.color = model ? mi.color : '';
 }
 const facetQS = (m, e) => (m ? `&model=${encodeURIComponent(m)}` : '') + (e ? `&effort=${encodeURIComponent(e)}` : '')
-  + (srcFilter ? `&source=${encodeURIComponent(srcFilter)}` : '');
+  + (srcFilter ? `&source=${encodeURIComponent(srcFilter)}` : '')
+  + (repoFilter ? `&repo=${encodeURIComponent(repoFilter)}` : '');
+
+function trendQS(lvl) {
+  return `/api/trends?period=${lvl.period}${trendSub ? '&subagents=1' : ''}${facetQS(trModel, trEffort)}`
+    + (lvl.from != null ? `&from=${lvl.from}&to=${lvl.to}` : '');
+}
 
 async function loadTrends() {
+  trendTrail = [{ period: trendPeriod, from: null, to: null, sel: null, data: null }];
   const el = $('#trends');
-  const r = await fetch(`/api/trends?period=${trendPeriod}${trendSub ? '&subagents=1' : ''}${facetQS(trModel, trEffort)}`).then(x => x.json());
+  const r = await fetch(trendQS(trendTrail[0])).then(x => x.json());
   if (r.building) {
     const p = r.progress || {};
     el.innerHTML = `<div class="empty">Building rollup cache… ${p.done || 0} / ${p.total || '?'} sessions<br>
@@ -1186,11 +1274,34 @@ async function loadTrends() {
     trendPoll = setTimeout(loadTrends, 1500);
     return;
   }
+  trendTrail[0].data = r;
   trendData = r;
   fillFacet($('#trModel'), r.facets && r.facets.models, trModel, 'all models', true);
   fillFacet($('#trEffort'), r.facets && r.facets.efforts, trEffort, 'all efforts');
   renderTrends();
 }
+
+// A bar was clicked: pick it (or unpick it), then open the next granularity down
+// beneath it. Levels below the clicked one are dropped — that branch is stale.
+async function trendPick(level, bucket) {
+  const L = trendTrail[level];
+  if (!L) return;
+  trendTrail.length = level + 1;
+  if (L.sel === bucket) { L.sel = null; renderTrends(); return; }
+  L.sel = bucket;
+  const finer = FINER[L.period];
+  const span = finer && bucketRange(L.period, bucket);
+  if (!span) { renderTrends(); return; }         // nothing finer — the pick just filters
+  const next = { period: finer, from: span[0], to: span[1], sel: null, data: null };
+  trendTrail.push(next);
+  renderTrends();
+  const r = await fetch(trendQS(next)).then(x => x.json());
+  if (trendTrail[level + 1] !== next) return;    // the user moved on while we fetched
+  next.data = r.building ? null : r;
+  next.failed = !!r.building;
+  renderTrends();
+}
+chartPickers.set('trend', (id, b) => trendPick(+id.split(':')[1], b));
 
 function tspark(per, buckets, keyOrFn) {
   const f = typeof keyOrFn === 'function' ? keyOrFn : (o => (o && o[keyOrFn]) || 0);
@@ -1202,19 +1313,67 @@ function tspark(per, buckets, keyOrFn) {
   return `<svg class="spark" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${bars}</svg>`;
 }
 
+// ---------------------------------------------------------------------------
+// bucket keys — the chart's x-axis, and the unit a click filters/drills by
+// ---------------------------------------------------------------------------
+// clicking a bar drills to the next granularity down; null = nothing finer
+const FINER = { month: 'week', week: 'day', day: 'hourly', hourly: null, slot: null, hour: null };
+
+// A bucket key alone is ambiguous — a week and a day are both YYYY-MM-DD — so the
+// period decides how far the range runs.
+function bucketRange(period, b) {
+  const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?(?:T(\d{2})(?::(\d{2}))?)?$/.exec(b || '');
+  if (!m) return null;
+  const y = +m[1], mo = +m[2] - 1, d = +m[3] || 1, h = +m[4] || 0, mi = +m[5] || 0;
+  const span = period === 'month' ? [new Date(y, mo, 1), new Date(y, mo + 1, 1)]
+    : period === 'week' ? [new Date(y, mo, d), new Date(y, mo, d + 7)]
+    : period === 'day' ? [new Date(y, mo, d), new Date(y, mo, d + 1)]
+    : period === 'hourly' ? [new Date(y, mo, d, h), new Date(y, mo, d, h + 1)]
+    : [new Date(y, mo, d, h, mi), new Date(y, mo, d, h, mi + HOUR_SLOT_MIN)];
+  return [span[0].getTime(), span[1].getTime()];
+}
+
+// "Output tokens" -> "output tokens", but "Δ tokens" keeps its delta
+const lowerLbl = (t) => /^[A-Z][a-z]/.test(t) ? t[0].toLowerCase() + t.slice(1) : t;
+
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const hhmm = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+
+// the prominent "you are looking at this slice of time" label
+function bucketTitle(period, b) {
+  const r = bucketRange(period, b);
+  if (!r) return b;
+  const a = new Date(r[0]), z = new Date(r[1]);
+  const dayStr = `${DOW[a.getDay()]}, ${MON[a.getMonth()]} ${a.getDate()} ${a.getFullYear()}`;
+  if (period === 'month') return `${MON[a.getMonth()]} ${a.getFullYear()}`;
+  if (period === 'week') return `Week of ${MON[a.getMonth()]} ${a.getDate()}, ${a.getFullYear()}`;
+  if (period === 'day') return dayStr;
+  return `${dayStr} · ${hhmm(a)}–${hhmm(new Date(r[1] - 1))}`;
+}
+
+// how a bucket key reads on an axis or a table header
+const tickLbl = (b) => b.includes(':') ? b.slice(11)        // 2026-08-31T16:05 -> 16:05
+  : /T\d{2}$/.test(b) ? b.slice(11) + ':00'                 // 2026-08-31T16    -> 16:00
+  : b.length > 7 ? b.slice(5) : b;                          // 2026-08-31       -> 08-31
+
 // HTML/CSS bar chart — responsive, no SVG text stretching.
 // opts.line = secondary series (drawn as a faint polyline), opts.lineLabel = its name
+// opts.pick = click-target id (bars become clickable), opts.sel = selected bucket
 function tbarChart(buckets, valueFn, label, opts = {}) {
   if (!buckets.length) return '<div class="bchart"><div class="bc-title">no data</div></div>';
   const vals = buckets.map(valueFn);
   const max = Math.max(...vals, 1);
   const n = buckets.length;
-  // bars stretch to fill the plot; this is only the width below which the chart
-  // starts scrolling sideways instead of squeezing bars into slivers
-  const slot = 6;                                              // min bar + gap px
-  const wantW = n * slot;
-  const scrolls = wantW > 1180;                                // (title hint only)
-  const step = Math.max(1, Math.ceil(n / Math.floor(Math.max(wantW, 980) / 66)));
+  // The plot is as wide as the series needs, not as wide as the panel — but a
+  // three-bar month chart should not be a 20px sliver either. Aim every chart at
+  // roughly one width and let the bar size fall out of the bucket count, clamped
+  // so a dense series stays narrow and a sparse one stays readable.
+  const GAP = 1, TARGET_W = 440, MIN_BAR = 6, MAX_BAR = 56;
+  const BAR = Math.max(MIN_BAR, Math.min(MAX_BAR, Math.round(TARGET_W / n) - GAP));
+  const slot = BAR + GAP;
+  const wantW = n * slot - GAP;
+  const scrolls = wantW > 1100;                                // (title hint only)
   let lineSvg = '';
   const line = opts.line;
   if (line && line.length === n && line.some(v => v)) {
@@ -1223,28 +1382,128 @@ function tbarChart(buckets, valueFn, label, opts = {}) {
     const pts = line.map((v, i) => `${(i / d * 100).toFixed(2)},${(96 - v / lmax * 92).toFixed(2)}`).join(' ');
     lineSvg = `<svg class="bc-line" viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points="${pts}"/></svg>`;
   }
-  const lbl = (b) => b.includes(':') ? b.slice(11) : b.length > 7 ? b.slice(5) : b;
-  return `<div class="bchart">
-    ${label ? `<div class="bc-title">${esc(label)}${opts.lineLabel ? ` · <span class="bc-l2">${esc(opts.lineLabel)} (line)</span>` : ''}${scrolls ? ' · scroll →' : ''}</div>` : ''}
+  const lbl = tickLbl;
+  // skip enough ticks that the widest legend still clears its neighbours
+  const lblW = Math.max(...buckets.map(b => lbl(b).length)) * 5.8 + 8;
+  const step = Math.max(1, Math.ceil(lblW / slot));
+  const selIdx = opts.sel ? buckets.indexOf(opts.sel) : -1;
+  // Ticks sit on an even grid `step` bars apart, anchored on the picked bar. That
+  // gives the pick a label without dropping the neighbour it would have crowded —
+  // the whole row just shifts, so the spacing stays uniform either way.
+  const cx = (i) => i * slot + BAR / 2;                       // centre of bar i
+  const ticks = [];
+  for (let i = (selIdx >= 0 ? selIdx : 0) % step; i < n; i += step) ticks.push(i);
+  // the leftmost label is flush left so it starts at the plot edge; a trailing one
+  // that would hang off the right is dropped instead (unless it is the pick)
+  const lead = ticks.length && cx(ticks[0]) < lblW / 2 ? ticks[0] : -1;
+  const shown = new Set(ticks.filter(i =>
+    i === selIdx || i === lead || cx(i) + lblW / 2 <= wantW));
+  const tick = (i) => [i === selIdx ? 'on' : '', i === lead ? 'lead' : ''].filter(Boolean).join(' ');
+  const pickAttrs = opts.pick ? ` pick" data-pick="${attr(opts.pick)}"` : '"';
+  const hint = opts.pick ? ` · <span class="bc-l2">click a bar to ${FINER[opts.period] ? 'drill in' : 'filter'}</span>` : '';
+  return `<div class="bchart${opts.drilled ? ' drilled' : ''}">
+    ${label ? `<div class="bc-title">${esc(label)}${opts.lineLabel ? ` · <span class="bc-l2">${esc(opts.lineLabel)} (line)</span>` : ''}${hint}${scrolls ? ' · scroll →' : ''}</div>` : ''}
     <div class="bc-body">
-      <div class="bc-yax">${[1, 0.75, 0.5, 0.25, 0].map(f => `<span>${kfmt(max * f)}</span>`).join('')}</div>
-      <div class="bc-scroll"><div class="bc-inner" style="width:max(100%, ${wantW}px)">
-        <div class="bc-plot">
-          ${vals.map((v, i) => `<div class="bc-bar" style="height:${(v / max * 100).toFixed(1)}%" title="${esc(buckets[i])} — ${fmt(v)}"></div>`).join('')}
+      <div class="bc-yax">${(opts.drilled ? [1, 0] : [1, 0.5, 0]).map(f => `<span>${kfmt(max * f)}</span>`).join('')}</div>
+      <div class="bc-scroll"><div class="bc-inner" style="width:${wantW}px;--bw:${BAR}px">
+        <div class="bc-plot${pickAttrs}>
+          ${vals.map((v, i) => `<div class="bc-col${i === selIdx ? ' sel' : ''}" data-b="${attr(buckets[i])}" title="${esc(buckets[i])} — ${fmt(v)}"
+            ><div class="bc-bar" style="height:${(v / max * 100).toFixed(1)}%"></div></div>`).join('')}
           ${lineSvg}
         </div>
-        <div class="bc-xax">${buckets.map((b, i) => `<span>${i % step === 0 ? esc(lbl(b)) : ''}</span>`).join('')}</div>
+        <div class="bc-xax">${buckets.map((b, i) =>
+          `<span${tick(i) ? ` class="${tick(i)}"` : ''}>${shown.has(i) ? esc(lbl(b)) : ''}</span>`).join('')}</div>
       </div></div>
     </div>
   </div>`;
 }
 
+
+// What the tables (and every row's own chart) describe: the deepest level that has
+// arrived, since it is already scoped to every pick above it. Only a pick on the
+// last level still has to filter — there is no finer level to fetch for it.
+function trendSource() {
+  for (let i = trendTrail.length - 1; i >= 0; i--) {
+    const L = trendTrail[i];
+    if (L.data) return { L, idx: i, sel: i === trendTrail.length - 1 ? L.sel : null };
+  }
+  return { L: trendTrail[0], idx: 0, sel: null };
+}
+
+// the deepest bucket actually clicked, wherever it sits in the trail
+function trendPicked() {
+  for (let i = trendTrail.length - 1; i >= 0; i--) if (trendTrail[i].sel && trendTrail[i].data) return trendTrail[i];
+  return null;
+}
+
+// one chart per drill level, each keeping its own bars clickable so siblings
+// stay one click away
+// the selected row's series inside one level's data, if it is present there
+function entityRow(data) {
+  if (!trendEntity || !data) return null;
+  return trendEntity.kind === 'cmd'
+    ? (data.byCommand || []).find(r => r.base === trendEntity.key)
+    : (data.byPrompt || []).find(r => r.prompt === trendEntity.key);
+}
+
+function trendCharts() {
+  return trendTrail.map((L, i) => {
+    if (!L.data) return `<div class="bchart"><div class="bc-title">${L.failed
+      ? 'still building the rollup cache — try again in a moment' : `loading ${esc(perLbl(L.period))}…`}</div></div>`;
+    const row = entityRow(L.data);
+    const what = trendEntity ? `${short(trendEntity.key, 60)} — tokens` : 'billed tokens';
+    const label = (i === 0 ? `${what} per ` : `${bucketTitle(trendTrail[i - 1].period, trendTrail[i - 1].sel)} — ${what} per `)
+      + perLbl(L.period);
+    const val = trendEntity
+      ? (b) => (row && row.per[b] && row.per[b].tokens) || 0
+      : (b) => (L.data.totals[b] && L.data.totals[b].tokens) || 0;
+    return tbarChart(L.data.buckets, val, label,
+      { pick: `trend:${i}`, sel: L.sel, period: L.period, drilled: i < trendTrail.length - 1 });
+  }).join('');
+}
+
+// Undo the last pick — the deepest selected level goes back to unselected, which
+// is the state just before that click. Offered wherever a pick can leave you
+// looking at nothing, so an empty slice is never a dead end.
+const undoBtn = (target, cls) =>
+  `<button class="undo${cls ? ' ' + cls : ''}" data-scope-undo="${attr(target)}"
+    title="undo the last filter">↺</button>`;
+
+// "you are looking at this slice of time", stated above the tables it filters
+function scopeBar(trail, onClear) {
+  const p = trendPicked();
+  // read the row from the level the pick was made on — its per[] is keyed by
+  // that level's buckets, not the deeper level's
+  const row = entityRow((p || trendSource().L).data);
+  if (!p && !trendEntity) return '';
+  const t = p ? (p.data.totals[p.sel] || {}) : (trendSource().L.data.grand || {});
+  const sliceOf = p ? bucketTitle(p.period, p.sel) : 'All time';
+  const path = trail.filter(l => l.sel).map(l => `<b>${esc(bucketTitle(l.period, l.sel))}</b>`).join(' → ');
+  const nums = trendEntity && row
+    ? `${fmt((p ? (row.per[p.sel] || {}).tokens : row.total) || 0)} tokens · ${fmt((p ? (row.per[p.sel] || {}).count : row.count) || 0)} runs`
+    : `${fmt(t.tokens || 0)} tokens · ${fmt(t.commands || 0)} commands · ${fmt(t.sessions || 0)} sessions`;
+  return `<div class="scopebar">
+    <span class="when">${esc(sliceOf)}</span>
+    ${trendEntity ? `<span class="chip" title="${attr(trendEntity.key)}">${esc(short(trendEntity.key, 48))}
+      <button data-entity-clear="trend" title="show every command again">×</button></span>` : ''}
+    <span class="what">${nums}</span>
+    ${path ? `<span class="path">all → ${path}</span>` : '<span class="path"></span>'}
+    ${p ? undoBtn(onClear) : ''}
+    <button data-scope-clear="${attr(onClear)}">clear</button>
+  </div>`;
+}
+
 function renderTrends() {
-  const d = trendData;
-  const B = d.buckets;
-  if (!B.length) { $('#trends').innerHTML = '<div class="empty">No sessions found.</div>'; return; }
+  const L0 = trendTrail[0];
+  if (!L0 || !L0.data) return;
+  // a refetch (period, facet, repo) can retire the selected row
+  if (trendEntity && !entityRow(L0.data)) trendEntity = null;
+  const keepCf = (($('#cmdFilter') || {}).value) || '';
+  const keepPf = (($('#promptFilter') || {}).value) || '';
+  const d = L0.data;
+  if (!d.buckets.length) { $('#trends').innerHTML = '<div class="empty">No sessions found.</div>'; return; }
   const g = d.grand;
-  const totalsByBucket = b => (d.totals[b] && d.totals[b].tokens) || 0;
+  trendData = trendSource().L.data;
 
   $('#trends').innerHTML = `
     <div class="tgrand">
@@ -1255,18 +1514,19 @@ function renderTrends() {
       <span>cached <b>${fmt(g.cached)}</b></span>
       <span>out <b>${fmt(g.output)}</b></span>
       <span>reasoning <b>${fmt(g.reasoning)}</b></span>`}
-      <span style="margin-left:auto">${B.length} ${perLblN(trendPeriod)} · ${d.sessions} sessions${trendSub ? ' (incl. subagents)' : ''}${d.byCommandTime ? ' · by command time' : ''}</span>
+      <span style="margin-left:auto">${d.buckets.length} ${perLblN(trendPeriod)} · ${d.sessions} sessions${trendSub ? ' (incl. subagents)' : ''}${d.byCommandTime ? ' · by command time' : ''}</span>
     </div>
-    ${tbarChart(B, totalsByBucket, 'billed tokens per ' + perLbl(trendPeriod))}
+    ${trendCharts()}
+    ${scopeBar(trendTrail, 'trend')}
     <div class="tcols">
       <div>
-        <p class="subh">By base command — click a row for its trend</p>
-        <input class="tfilter" id="cmdFilter" placeholder="filter commands…" oninput="renderTrendTables()">
+        <p class="subh">By base command — click a row to plot it above</p>
+        <input class="tfilter" id="cmdFilter" value="${attr(keepCf)}" placeholder="filter commands…" oninput="renderTrendTables()">
         <div id="cmdTable"></div>
       </div>
       <div>
-        <p class="subh">By prompt — click a row for its trend</p>
-        <input class="tfilter" id="promptFilter" placeholder="filter prompts…" oninput="renderTrendTables()">
+        <p class="subh">By prompt — click a row to plot it above</p>
+        <input class="tfilter" id="promptFilter" value="${attr(keepPf)}" placeholder="filter prompts…" oninput="renderTrendTables()">
         <div id="promptTable"></div>
       </div>
     </div>`;
@@ -1275,62 +1535,87 @@ function renderTrends() {
 
 let trendCmdRows = [], trendPromptRows = [];
 
-function trendDetailRows(r, B) {
-  const T = B.length > 96 ? B.slice(-96) : B;
-  return `<tr class="trow-detail"><td colspan="4">
-    ${tbarChart(B, b => (r.per[b] && r.per[b].tokens) || 0, 'tokens per ' + perLbl(trendPeriod))}
-    <div style="overflow-x:auto"><table><tbody>
-      <tr class="lbl-row"><td>${trendPeriod}${T !== B ? ` (last ${T.length})` : ''}</td>${T.map(b => `<td class="num">${b.slice(5)}</td>`).join('')}</tr>
-      <tr><td class="num">tok</td>${T.map(b => `<td class="num">${kfmt((r.per[b] && r.per[b].tokens) || 0)}</td>`).join('')}</tr>
-      <tr><td class="num">runs</td>${T.map(b => `<td class="num">${(r.per[b] && r.per[b].count) || 0}</td>`).join('')}</tr>
-    </tbody></table></div></td></tr>`;
+// A picked bucket collapses every row to just that bucket's numbers, so the
+// tables answer "what ran in this slice" instead of "what ran overall".
+function bucketCut(rows, sel) {
+  if (!sel) return rows;
+  return rows
+    .map(r => ({ ...r, total: (r.per[sel] || {}).tokens || 0, count: (r.per[sel] || {}).count || 0 }))
+    .filter(r => r.total || r.count)
+    .sort((a, b) => b.total - a.total);
 }
 
 function renderTrendTables() {
-  const d = trendData, B = d.buckets;
+  const src = trendSource();
+  const d = src.L.data, B = d.buckets, sel = src.sel;
   const cf = (($('#cmdFilter') || {}).value || '').toLowerCase();
   const pf = (($('#promptFilter') || {}).value || '').toLowerCase();
 
-  trendCmdRows = d.byCommand.filter(r => r.base.toLowerCase().includes(cf)).slice(0, 200);
+  // an empty slice is a pick you probably want to take back, not a dead end
+  const picked = trendPicked();
+  const emptyRow = (what) => `<tr><td colspan="4" class="blurb">No ${what} ${
+    picked ? 'in this slice' : 'match'}.${picked ? ' ' + undoBtn('trend', 'inline') : ''}</td></tr>`;
+
+  trendCmdRows = bucketCut(d.byCommand, sel).filter(r => r.base.toLowerCase().includes(cf)).slice(0, 200);
   $('#cmdTable').innerHTML = `<table><thead><tr>
     <th>Base</th><th class="num">Total tok</th><th class="num">Runs</th><th class="trend-cell">Trend</th></tr></thead><tbody>
+    ${trendCmdRows.length ? '' : emptyRow('commands')}
     ${trendCmdRows.map((r, i) => {
-      const open = tExpanded.cmd.has(r.base);
-      return `<tr class="trow" data-tkind="cmd" data-ti="${i}" style="cursor:pointer">
-        <td class="base">${open ? '▾ ' : '▸ '}${esc(r.base)}
+      const on = trendEntity && trendEntity.kind === 'cmd' && trendEntity.key === r.base;
+      return `<tr class="trow${on ? ' on' : ''}" data-tkind="cmd" data-ti="${i}" title="plot just this command above">
+        <td class="base" title="${attr(r.base)}">${esc(r.base)}
           <span class="cmdlink" data-cmd="${esc(r.base)}" title="open command trends" style="margin-left:6px;border:0">⤢</span></td>
         <td class="num">${fmt(r.total)}</td><td class="num">${fmt(r.count)}</td>
-        <td>${tspark(r.per, B, 'tokens')}</td></tr>`
-        + (open ? trendDetailRows(r, B) : '');
+        <td>${tspark(r.per, B, 'tokens')}</td></tr>`;
     }).join('')}
   </tbody></table>`;
 
-  trendPromptRows = d.byPrompt.filter(r => r.prompt.toLowerCase().includes(pf)).slice(0, 200);
+  trendPromptRows = bucketCut(d.byPrompt, sel).filter(r => r.prompt.toLowerCase().includes(pf)).slice(0, 200);
   $('#promptTable').innerHTML = `<table><thead><tr>
     <th>Prompt</th><th class="num">Total tok</th><th class="num">Sess</th><th class="trend-cell">Trend</th></tr></thead><tbody>
+    ${trendPromptRows.length ? '' : emptyRow('prompts')}
     ${trendPromptRows.map((r, i) => {
-      const open = tExpanded.prompt.has(r.prompt);
-      return `<tr class="trow" data-tkind="prompt" data-ti="${i}" style="cursor:pointer">
-        <td style="max-width:340px" title="${esc(r.prompt).replace(/"/g, '&quot;')}">${open ? '▾ ' : '▸ '}${esc(short(r.prompt, 70))}
+      const on = trendEntity && trendEntity.kind === 'prompt' && trendEntity.key === r.prompt;
+      return `<tr class="trow${on ? ' on' : ''}" data-tkind="prompt" data-ti="${i}" title="plot just this prompt above">
+        <td style="max-width:340px" title="${attr(r.prompt)}">${esc(short(r.prompt, 70))}
           ${r.project ? `<span class="badge">${esc(r.project)}</span>` : ''}</td>
         <td class="num">${fmt(r.total)}</td><td class="num">${fmt(r.count)}</td>
-        <td>${tspark(r.per, B, 'tokens')}</td></tr>`
-        + (open ? trendDetailRows(r, B) : '');
+        <td>${tspark(r.per, B, 'tokens')}</td></tr>`;
     }).join('')}
   </tbody></table>`;
 }
 
 document.addEventListener('click', (e) => {
   if (e.target.closest('.cmdlink')) return;   // handled by the command-link listener
+  const sc = e.target.closest('[data-scope-clear], [data-scope-undo]');
+  if (sc) {
+    const which = sc.dataset.scopeClear || sc.dataset.scopeUndo;
+    const trail = which === 'trend' ? trendTrail : ctGet(which.slice(3)).trail;
+    if (sc.dataset.scopeUndo) {
+      // drop only the deepest pick, so one click steps back one level
+      for (let i = trail.length - 1; i >= 0; i--) if (trail[i].sel) { trail[i].sel = null; trail.length = i + 1; break; }
+    } else {
+      trail.length = 1;
+      trail[0].sel = null;
+    }
+    if (which === 'trend') renderTrends(); else ctRerender(which.slice(3));
+    return;
+  }
+  const ec2 = e.target.closest('[data-entity-clear]');
+  if (ec2) {
+    if (ec2.dataset.entityClear === 'trend') { trendEntity = null; renderTrends(); }
+    else { const b = ec2.dataset.entityClear.slice(3); ctGet(b).entity = null; ctRerender(b); }
+    return;
+  }
   const tr = e.target.closest('.trow');
   if (tr) {
     const kind = tr.dataset.tkind;
     const r = (kind === 'cmd' ? trendCmdRows : trendPromptRows)[+tr.dataset.ti];
     if (!r) return;
     const key = kind === 'cmd' ? r.base : r.prompt;
-    const s = tExpanded[kind];
-    if (s.has(key)) s.delete(key); else s.add(key);
-    renderTrendTables();
+    trendEntity = (trendEntity && trendEntity.kind === kind && trendEntity.key === key)
+      ? null : { kind, key };
+    renderTrends();          // the charts above are what changed
     return;
   }
   const ec = e.target.closest('.ecmd');
@@ -1346,7 +1631,6 @@ $('#periodSeg').addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b) return;
   [...$('#periodSeg').children].forEach(x => x.classList.toggle('on', x === b));
   trendPeriod = b.dataset.p;
-  tExpanded.cmd.clear(); tExpanded.prompt.clear();
   loadTrends();
 });
 $('#subToggle').addEventListener('change', (e) => { trendSub = e.target.checked; loadTrends(); });
@@ -1403,17 +1687,60 @@ function ctGet(base) {
   if (!ctState.has(base)) ctState.set(base, {
     period: 'week', metric: 'delta', sub: true,
     model: ecoModel || trModel || '', effort: ecoEffort || trEffort || '',
-    data: null, loading: false,
+    data: null, loading: false, trail: [], entity: null,
   });
   return ctState.get(base);
 }
+const ctQS = (base, s, lvl) =>
+  `/api/command?base=${encodeURIComponent(base)}&period=${lvl.period}&subagents=${s.sub ? 1 : 0}${facetQS(s.model, s.effort)}`
+  + (lvl.from != null ? `&from=${lvl.from}&to=${lvl.to}` : '');
+
 async function ctLoad(base) {
   const s = ctGet(base);
   s.loading = true;
-  const r = await fetch(`/api/command?base=${encodeURIComponent(base)}&period=${s.period}&subagents=${s.sub ? 1 : 0}${facetQS(s.model, s.effort)}`).then(x => x.json());
+  s.trail = [{ period: s.period, from: null, to: null, sel: null, data: null }];
+  const r = await fetch(ctQS(base, s, s.trail[0])).then(x => x.json());
   s.loading = false;
-  if (!r.building) s.data = r;
+  if (!r.building) { s.data = r; s.trail[0].data = r; }
   ctRerender(base);
+}
+
+// same drill as the trends chart: pick a bar, open the finer view under it
+async function ctPick(base, level, bucket) {
+  const s = ctGet(base);
+  const L = s.trail[level];
+  if (!L) return;
+  s.trail.length = level + 1;
+  if (L.sel === bucket) { L.sel = null; ctRerender(base); return; }
+  L.sel = bucket;
+  const finer = FINER[L.period];
+  const span = finer && bucketRange(L.period, bucket);
+  if (!span) { ctRerender(base); return; }
+  const next = { period: finer, from: span[0], to: span[1], sel: null, data: null };
+  s.trail.push(next);
+  ctRerender(base);
+  const r = await fetch(ctQS(base, s, next)).then(x => x.json());
+  if (s.trail[level + 1] !== next) return;
+  next.data = r.building ? null : r;
+  next.failed = !!r.building;
+  ctRerender(base);
+}
+// id is "ct:<level>:<base>", and a base may itself contain a colon
+chartPickers.set('ct', (id, b) => {
+  const p = id.split(':');
+  ctPick(p.slice(2).join(':'), +p[1], b);
+});
+// same rule as trendSource: the deepest level that arrived describes the panel
+function ctSource(s) {
+  for (let i = s.trail.length - 1; i >= 0; i--) {
+    const L = s.trail[i];
+    if (L.data) return { L, idx: i, sel: i === s.trail.length - 1 ? L.sel : null };
+  }
+  return { L: s.trail[0], idx: 0, sel: null };
+}
+function ctPicked(s) {
+  for (let i = s.trail.length - 1; i >= 0; i--) if (s.trail[i].sel && s.trail[i].data) return s.trail[i];
+  return null;
 }
 function ctRerender(base) {
   document.querySelectorAll(`[data-ct-host="${cssEsc(base)}"]`).forEach(el => { el.innerHTML = ctPanel(base); });
@@ -1451,16 +1778,58 @@ function ctPanel(base) {
     <label style="font-size:11px;color:var(--dim)"><input type="checkbox" data-ct-sub ${s.sub ? 'checked' : ''}> subagents</label>
   </div>`;
 
-  if (s.loading || !s.data) return ctrls + '<div class="empty">Loading trend…</div>';
-  const d = s.data;
-  if (!d.buckets.length) return ctrls + '<p class="blurb">No time-series data for this command.</p>';
+  if (s.loading || !s.data || !s.trail.length) return ctrls + '<div class="empty">Loading trend…</div>';
+  if (!s.data.buckets.length) return ctrls + '<p class="blurb">No time-series data for this command.</p>';
 
-  const B = d.buckets;
   const mLabel = (CT_METRICS.find(m => m.k === s.metric) || {}).label;
-  const perB = {}; B.forEach(b => { perB[b] = ctMetricVal(d, b, s.metric); });
-  const line = s.metric === 'calls' ? null : B.map(b => d.series.calls[b] || 0);
+  const src = ctSource(s);
+  const d = src.L.data, B = d.buckets, sel = src.sel;
+  if (s.entity && !((s.entity.kind === 'poll' ? s.data.pollTargets : s.data.samples) || [])
+      .some(r => r.cmd === s.entity.key)) s.entity = null;
 
-  const t = d.totals;
+  // per-row (process / invocation) metric — there's no per-row Δ tokens, so
+  // fall back to output tokens for the Δ view
+  const rowMetric = s.metric === 'delta' ? 'outTokens' : s.metric;
+  const rowLabel = s.metric === 'delta' ? 'Output tokens' : mLabel;
+  const rpf = ctPerFn(rowMetric);
+
+  // The tables pick *what* is plotted; the chart stack picks *when*.
+  const findRow = (data) => !s.entity || !data ? null
+    : ((s.entity.kind === 'poll' ? data.pollTargets : data.samples) || []).find(r => r.cmd === s.entity.key);
+
+  // one chart per drill level; the bars of the levels above stay clickable
+  const charts = s.trail.map((L, i) => {
+    if (!L.data) return `<div class="bchart"><div class="bc-title">${L.failed
+      ? 'still building the rollup cache — try again in a moment' : `loading ${esc(perLbl(L.period))}…`}</div></div>`;
+    const lb = L.data.buckets;
+    const eRow = findRow(L.data);
+    const lPer = {};
+    lb.forEach(b => { lPer[b] = s.entity ? (eRow ? rpf(eRow.per[b], b) || 0 : 0) : ctMetricVal(L.data, b, s.metric); });
+    const lLine = s.metric === 'calls' || s.entity ? null : lb.map(b => L.data.series.calls[b] || 0);
+    const subject = s.entity ? `${lowerLbl(rowLabel)} — ${short(realCmd(s.entity.key), 60)}`
+      : `${lowerLbl(mLabel)} — all invocations of ${base}`;
+    const head = (i === 0 ? '' : `${bucketTitle(s.trail[i - 1].period, s.trail[i - 1].sel)} — `)
+      + `${subject}, per ${perLbl(L.period)}`;
+    return tbarChart(lb, b => lPer[b], head,
+      { pick: `ct:${i}:${base}`, sel: L.sel, period: L.period, drilled: i < s.trail.length - 1,
+        ...(lLine ? { line: lLine, lineLabel: 'calls' } : {}) });
+  }).join('');
+
+  const pk = ctPicked(s);
+  const eRow = findRow(pk ? pk.data : d);
+  const scope = (pk || s.entity) ? `<div class="scopebar">
+    <span class="when">${esc(pk ? bucketTitle(pk.period, pk.sel) : 'All time')}</span>
+    ${s.entity ? `<span class="chip" title="${attr(s.entity.key)}">${esc(short(realCmd(s.entity.key), 48))}
+      <button data-entity-clear="ct:${attr(base)}" title="show every invocation again">×</button></span>` : ''}
+    <span class="what">${s.entity
+      ? `${fmt((eRow && pk ? rpf(eRow.per[pk.sel], pk.sel) : eRow && eRow.out) || 0)} ${esc(lowerLbl(rowLabel))} · ${fmt((eRow && pk ? (eRow.per[pk.sel] || {}).calls : eRow && eRow.count) || 0)} calls`
+      : pk ? `${fmt(ctMetricVal(pk.data, pk.sel, s.metric))} ${esc(lowerLbl(mLabel))} · ${fmt(pk.data.series.calls[pk.sel] || 0)} calls` : ''}</span>
+    <span class="path">${pk ? 'all → ' + s.trail.filter(l => l.sel).map(l => `<b>${esc(bucketTitle(l.period, l.sel))}</b>`).join(' → ') : ''}</span>
+    ${pk ? undoBtn('ct:' + base) : ''}
+    <button data-scope-clear="ct:${attr(base)}">clear</button>
+  </div>` : '';
+
+  const t = s.data.totals;
   const grand = `<div class="tgrand" style="margin:6px 0 8px">
     <span><b>${fmt(t.delta)}</b> Δ tokens</span>
     <span><b>${fmt(t.outTokens)}</b> output tokens</span>
@@ -1469,46 +1838,34 @@ function ctPanel(base) {
     <span style="margin-left:auto">${B.length} ${perLblN(s.period)} · ${fmt(t.sessions)} sessions</span>
   </div>`;
 
-  const open = s.openRows || (s.openRows = new Set());
-  // per-row (process / invocation) metric — there's no per-row Δ tokens, so
-  // fall back to output tokens for the Δ view
-  const rowMetric = s.metric === 'delta' ? 'outTokens' : s.metric;
-  const rowLabel = s.metric === 'delta' ? 'Output tokens' : mLabel;
-  const rpf = ctPerFn(rowMetric);
-  const sampRows = (rows) => rows.map(r => {
-    const o = open.has(r.cmd);
-    let h = `<tr class="ctrow" data-ct-row="${attr(r.cmd)}" data-ct-rowbase="${attr(base)}" style="cursor:pointer">
-      <td class="cmd" title="${attr(r.cmd)}">${o ? '▾ ' : '▸ '}${esc(short(realCmd(r.cmd), 120))}</td>
+  // a picked bucket collapses each invocation row to what it did in that slice
+  const cut = (rows) => !sel ? rows : rows
+    .map(r => ({ ...r, count: (r.per[sel] || {}).calls || 0, out: (r.per[sel] || {}).outTokens || 0 }))
+    .filter(r => r.count || r.out)
+    .sort((a, b) => b.out - a.out || b.count - a.count);
+  const sampRows = (rows, kind) => cut(rows).map(r => {
+    const on = s.entity && s.entity.kind === kind && s.entity.key === r.cmd;
+    return `<tr class="ctrow${on ? ' on' : ''}" data-ct-row="${attr(r.cmd)}" data-ct-kind="${kind}"
+      data-ct-rowbase="${attr(base)}" title="plot just this one above">
+      <td class="cmd" title="${attr(r.cmd)}">${esc(short(realCmd(r.cmd), 120))}</td>
       <td class="num">${fmt(r.count)}</td>
       <td class="num">${fmt(r.out)}</td>
       <td class="trend-cell">${tspark(r.per, B, rpf)}</td></tr>`;
-    if (o) {
-      const T = B.length > 96 ? B.slice(-96) : B;
-      h += `<tr class="trow-detail"><td colspan="4">
-        ${tbarChart(B, b => (rpf(r.per[b], b) || 0), esc(short(realCmd(r.cmd), 90)) + ' — ' + rowLabel.toLowerCase() + ' per ' + perLbl(s.period))}
-        <div style="overflow-x:auto"><table><tbody>
-          <tr class="lbl-row"><td>${s.period}${T !== B ? ` (last ${T.length})` : ''}</td>${T.map(b => `<td class="num">${b.slice(5)}</td>`).join('')}</tr>
-          <tr><td class="num">${esc(rowLabel)}</td>${T.map(b => `<td class="num">${kfmt(rpf(r.per[b], b) || 0)}</td>`).join('')}</tr>
-          <tr><td class="num">runs</td>${T.map(b => `<td class="num">${(r.per[b] && r.per[b].calls) || 0}</td>`).join('')}</tr>
-        </tbody></table></div></td></tr>`;
-    }
-    return h;
   }).join('');
 
   const realSamples = (d.samples || []).filter(x => x.cmd && x.cmd !== base && x.cmd.length > base.length + 1);
   const samplesTbl = realSamples.length ? `
-    <p class="subh" style="margin-top:10px">Actual invocations — click a row for its ${esc(rowLabel.toLowerCase())} trend</p>
+    <p class="subh" style="margin-top:10px">Actual invocations — click a row to plot it above</p>
     <table><thead><tr><th>Command</th><th class="num">Runs</th><th class="num">~Out tok</th><th class="trend-cell">Trend</th></tr></thead>
-    <tbody>${sampRows(realSamples)}</tbody></table>` : '';
+    <tbody>${sampRows(realSamples, 'samp')}</tbody></table>` : '';
   const pollsTbl = (d.pollTargets || []).length ? `
-    <p class="subh" style="margin-top:10px">Processes being polled — click a row for its ${esc(rowLabel.toLowerCase())} trend</p>
+    <p class="subh" style="margin-top:10px">Processes being polled — click a row to plot it above</p>
     <table><thead><tr><th>Process</th><th class="num">Polls</th><th class="num">~Tokens</th><th class="trend-cell">Trend</th></tr></thead>
-    <tbody>${sampRows(d.pollTargets)}</tbody></table>` : '';
+    <tbody>${sampRows(d.pollTargets, 'poll')}</tbody></table>` : '';
 
-  return ctrls + grand
-    + `<p class="subh" style="margin-top:8px">${esc(mLabel)} per ${perLbl(s.period)} — all invocations of <code>${esc(base)}</code></p>`
-    + tbarChart(B, b => perB[b], null, line ? { line, lineLabel: 'calls' } : {})
-    + samplesTbl + pollsTbl;
+  return ctrls + grand + charts + scope
+    + (samplesTbl || pollsTbl
+      || `<p class="blurb">Nothing ran in this slice.${pk ? ' ' + undoBtn('ct:' + base, 'inline') : ''}</p>`);
 }
 
 // inline block for an expanded Economy "By command" row
@@ -1545,9 +1902,8 @@ document.addEventListener('click', (e) => {
   if (row) {
     const base = row.dataset.ctRowbase;
     const s = ctGet(base);
-    const set = s.openRows || (s.openRows = new Set());
-    const key = row.dataset.ctRow;
-    if (set.has(key)) set.delete(key); else set.add(key);
+    const key = row.dataset.ctRow, kind = row.dataset.ctKind;
+    s.entity = (s.entity && s.entity.kind === kind && s.entity.key === key) ? null : { kind, key };
     ctRerender(base);
   }
 });
@@ -1592,7 +1948,8 @@ const CLASS_HINT = {
 async function loadAgents() {
   const el = $('#agents');
   const r = await fetch(`/api/agents?range=${agRange}&by=${agBy}&subagents=${agSub ? 1 : 0}`
-    + (srcFilter ? `&source=${encodeURIComponent(srcFilter)}` : '')).then(x => x.json());
+    + (srcFilter ? `&source=${encodeURIComponent(srcFilter)}` : '')
+    + (repoFilter ? `&repo=${encodeURIComponent(repoFilter)}` : '')).then(x => x.json());
   if (r.building) {
     const p = r.progress || {};
     el.innerHTML = `<div class="empty">Building rollup cache… ${p.done || 0} / ${p.total || '?'} sessions</div>`;
@@ -1932,6 +2289,25 @@ $('#srcSeg').addEventListener('click', (e) => {
 // the agent filter carries the same marks as the panels it filters
 $('#srcCodex').insertAdjacentHTML('afterbegin', OPENAI_MARK);
 $('#srcClaude').insertAdjacentHTML('afterbegin', CLAUDE_MARK);
+
+// Repo filter — a session attribute like the agent source, so it applies to
+// every tab rather than living inside one of them.
+async function loadRepoFacet() {
+  const f = await fetch('/api/facets').then(x => x.json()).catch(() => null);
+  if (!f) return;
+  if (f.building) { setTimeout(loadRepoFacet, 2000); return; }
+  fillFacet($('#repoSel'), f.repos, repoFilter, 'all repos');
+}
+$('#repoSel').addEventListener('change', (e) => {
+  repoFilter = e.target.value;
+  if (lastSnap) render(lastSnap);
+  if (histAll.length) renderHistory();
+  if (curTab === 'trends') loadTrends();
+  if (curTab === 'agents') loadAgents();
+  if (curTab === 'economy') loadEconomy();
+  trendData = null; ecoData = null;   // force a refetch when those tabs open
+});
+loadRepoFacet();
 
 connect();
 showTab(location.hash.slice(1) || 'running');

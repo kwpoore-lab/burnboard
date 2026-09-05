@@ -11,7 +11,7 @@ only.
 Every view carries an **All agents / Codex / Claude Code** toggle: see one tool in isolation, or
 both together in a single combined view with each session badged by which agent ran it.
 
-- **Prompts running now** — one live panel per active agent, refreshed every ~2s, with a
+- **Activity** — one live panel per active agent, refreshed every ~2s, with a
   billed-token consumption chart, the current command history, per-command token deltas, and a
   quota/usage bar (weekly rate-limit % + tokens today/this week).
 - **Subagent lineage** — spawned-by chains up to the root prompt, including Codex's auto-approval
@@ -66,7 +66,7 @@ It reads the flat `projects/<project-slug>/<session-id>.jsonl` transcripts under
 
 Five tabs: **Running now**, **History**, **Trends**, **Agents**, **Economy**.
 
-### Prompts running now
+### Activity
 
 Refreshed every 2s over Server-Sent Events.
 
@@ -212,12 +212,28 @@ is source-agnostic and simply carries a `source` tag through to the UI.
 | `GET /api/history` | lightweight rollup rows for the History table (all sessions) |
 | `GET /api/sessions?date=YYYY-MM-DD` | full session summaries for one day |
 | `GET /api/session/:uuid` | full timeline + summary |
-| `GET /api/trends?period=day\|week\|month&subagents=0\|1&source=codex\|claude` | aggregated rollups (`{building:true}` while first scan runs) |
+| `GET /api/trends?period=month\|week\|day\|hourly\|slot&subagents=0\|1&source=codex\|claude&from=&to=` | aggregated rollups (`{building:true}` while first scan runs) |
+| `GET /api/command?base=&period=…&from=&to=` | one command's series, samples and poll targets |
 | `GET /api/agents?range=all\|30d\|7d&by=agent\|role\|model\|effort\|project` | per-agent-type spend, efficiency rates and command-class mix |
 | `GET /api/economy?range=all\|30d\|7d&subagents=0\|1&source=codex\|claude` | token-economy signals from the same rollups |
+| `GET /api/facets` | the model / effort / repo values the filters offer |
 
 Every session record carries `source` (`"codex"` or `"claude"`). The aggregate endpoints accept
-an optional `source=` filter; omit it for the combined view.
+an optional `source=` filter; omit it for the combined view, and an optional `repo=` filter.
+
+`repo=` names a top-level checkout. Sessions run in a git worktree report the worktree directory
+rather than the repo, so `<repo>/.codex/worktrees/<branch>` is folded back into `<repo>`, and a
+checkout whose sessions never reported a remote is matched to the repo name that sessions from
+the same directory *did* report. `GET /api/facets` lists the resulting keys, and the History rows
+and live threads carry the same value as `repoKey`.
+
+`from=` / `to=` are epoch milliseconds and scope a request to one clicked bar, which is how the
+charts drill down: clicking a month asks for its weeks, a week for its days, a day for its hours.
+An hour is as fine as the drill goes — clicking one filters rather than opening a further level.
+(`slot`, the 5-minute bucket, still backs the live Hour view.) Below a day the buckets are keyed
+by the time each *command* ran rather than by session start — but only as far back as the sources
+keep per-command timestamps (24h); older sub-day ranges fall back to session start time and
+report `byCommandTime: false`.
 
 ## Trademarks
 
