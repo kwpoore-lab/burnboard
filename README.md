@@ -208,6 +208,21 @@ plugins, and the Bash hooks in `settings.json` — and only suggests what you ca
 names, never values, since those files hold credentials. No model is involved: every number is
 computed from your own history, so nothing is invented.
 
+**Diving deeper** is optional and never automatic. If an assistant CLI is installed, each finding
+offers to have one read the actual commands behind it — you choose which (Claude Code or Codex)
+and which model, and nothing runs until you click. It gets a small evidence window, not your
+history: the twenty commands around a poll run, the distinct invocations that re-read a file.
+
+The model annotates a finding; it never adds one. It inherits that finding's numbers, cannot
+reorder the list, and is given no field to put a figure in — so the ranking stays measured. Any
+quantity it states anyway that is absent from the evidence it was shown is flagged in the output
+as invented. Its answer is boxed, labelled with the runner and model that wrote it, and carries
+what the call cost you.
+
+With no assistant installed there is nothing to click and nothing missing: findings are the
+product, not a teaser for one. Detection is re-taken at startup, every few minutes, and
+immediately after a runner fails to launch, so removing one heals itself.
+
 Carried-context figures are exact over the calls that have per-command timestamps — normally all
 of them, and the coverage is stated inline either way. The per-turn cost is a per-session average,
 which understates polls because they cluster late in a session when the context is largest.
@@ -279,6 +294,7 @@ is source-agnostic and simply carries a `source` tag through to the UI.
 | `GET /api/agents?range=all\|30d\|7d&by=agent\|role\|model\|effort\|project` | per-agent-type spend, efficiency rates and command-class mix |
 | `GET /api/economy?range=all\|30d\|7d&subagents=0\|1&source=codex\|claude` | token-economy signals from the same rollups |
 | `GET /api/advice?range=&subagents=&model=&effort=&source=&repo=` | findings for the same slice as `/api/economy`, plus the detected toolchain |
+| `GET /api/deepen?id=<finding>&runner=claude\|codex&model2=` | runs the chosen local assistant over one finding's evidence (opt-in; spends your quota) |
 | `GET /api/facets` | the model / effort / repo values the filters offer |
 
 Every session record carries `source` (`"codex"` or `"claude"`). The aggregate endpoints accept

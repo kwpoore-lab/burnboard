@@ -1295,6 +1295,205 @@ function advice(sinceMs, includeSub, model, effort, source, repo) {
 }
 
 // ---------------------------------------------------------------------------
+// Deepening a finding with a model
+// ---------------------------------------------------------------------------
+// The model annotates a finding, it never adds one. Rules own what a thing costs
+// and how often it happened; the model only reads the actual commands and says
+// what the loop was doing and what to change. So it inherits the finding's
+// numbers, cannot reorder the list, and is given no field to put a figure in.
+const deepCache = new Map();
+
+// A small, targeted window per finding — never the corpus. Each kind knows what
+// evidence would let a reader judge it.
+function evidenceFor(id, recs) {
+  const kind = id.split(':')[0], arg = id.slice(kind.length + 1);
+  const lines = [];
+  const short = (c) => String(c || '').replace(/\s+/g, ' ').slice(0, 160);
+
+  if (kind === 'pollrun') {
+    let best = null;
+    for (const r of recs) {
+      const c = r.recentCmds || [];
+      for (let i = 0; i < c.length;) {
+        if (!POLL_BASES.has(c[i].b)) { i++; continue; }
+        let j = i;
+        while (j < c.length && POLL_BASES.has(c[j].b)) j++;
+        if (!best || j - i > best.n) best = { n: j - i, i, j, c, r };
+        i = j;
+      }
+    }
+    if (best) {
+      lines.push(`Session prompt: ${short(best.r.prompt)}`);
+      lines.push(`The ${best.n} commands before the run:`);
+      for (const x of best.c.slice(Math.max(0, best.i - 8), best.i)) lines.push(`  ${x.t} ${x.b}  ${short(x.c)}`);
+      lines.push(`The run itself (${best.n} calls, first and last three):`);
+      for (const x of [...best.c.slice(best.i, best.i + 3), ...best.c.slice(best.j - 3, best.j)]) {
+        lines.push(`  ${x.t} ${x.b}  ${short(x.c)}`);
+      }
+      lines.push('What followed the run:');
+      for (const x of best.c.slice(best.j, best.j + 5)) lines.push(`  ${x.t} ${x.b}  ${short(x.c)}`);
+    }
+  }
+
+  if (kind === 'reread') {
+    const counts = new Map();
+    for (const r of recs) {
+      const seen = new Set();
+      for (const x of r.recentCmds || []) {
+        if (classOf(x.b) !== 'read') continue;
+        for (const pth of pathsIn(x.c)) {
+          if (seen.has(pth)) counts.set(pth, (counts.get(pth) || 0) + 1);
+          seen.add(pth);
+        }
+      }
+    }
+    const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (top) {
+      lines.push(`Most re-read file: ${top[0]}`);
+      lines.push('Distinct commands that read it:');
+      const uniq = new Set();
+      for (const r of recs) for (const x of r.recentCmds || []) {
+        if (String(x.c || '').includes(top[0]) && uniq.size < 14) uniq.add(`  ${x.b}  ${short(x.c)}`);
+      }
+      lines.push(...uniq);
+    }
+  }
+
+  if (kind === 'idiom') {
+    lines.push('Consecutive read-then-read pairs, as they actually ran:');
+    let n = 0;
+    for (const r of recs) {
+      const c = r.recentCmds || [];
+      for (let k = 1; k < c.length && n < 10; k++) {
+        if (c[k - 1].b === c[k].b) continue;
+        if (classOf(c[k - 1].b) !== 'read' || classOf(c[k].b) !== 'read') continue;
+        lines.push(`  1) ${short(c[k - 1].c)}`);
+        lines.push(`  2) ${short(c[k].c)}`);
+        lines.push('  --');
+        n++;
+      }
+      if (n >= 10) break;
+    }
+  }
+
+  if (kind === 'dupes') {
+    lines.push('Commands a session ran repeatedly without their output changing:');
+    const all = [];
+    for (const r of recs) for (const d of r.dupes || []) all.push(d);
+    for (const d of all.sort((a, b) => b.count - a.count).slice(0, 10)) {
+      lines.push(`  ${d.count}x  ${short(d.cmd)}`);
+    }
+  }
+
+  if (kind === 'carry' || kind === 'trunc') {
+    lines.push(`Largest invocations of "${arg}" by output size:`);
+    const all = [];
+    for (const r of recs) for (const x of r.recentCmds || []) if (x.b === arg) all.push(x);
+    for (const x of all.sort((a, b) => (b.o || 0) - (a.o || 0)).slice(0, 12)) {
+      lines.push(`  ${x.o} output tokens${x.tr ? ' (truncated)' : ''}  ${short(x.c)}`);
+    }
+  }
+
+  return lines.join('\n').slice(0, 6000);
+}
+
+// Any figure the model states that is not in the evidence it was given is a
+// number it made up. Cheap to check, so check it.
+function unsupportedNumbers(text, evidence, finding) {
+  const known = new Set();
+  for (const m of (evidence + ' ' + JSON.stringify(finding)).matchAll(/\d[\d,]*/g)) {
+    known.add(m[0].replace(/,/g, ''));
+  }
+  const bad = [];
+  for (const m of String(text).matchAll(/\d[\d,]*(?:\.\d+)?\s*[BMk]?/g)) {
+    const raw = m[0].trim().replace(/,/g, '').replace(/[BMk]$/, '');
+    if (Number(raw) >= 100 && !known.has(raw)) bad.push(m[0].trim());
+  }
+  return [...new Set(bad)];
+}
+
+function deepenPrompt(finding, evidence, tc) {
+  return `You are reading one finding from a token-usage audit of an AI coding agent's own command history.
+The finding, its counts and its cost are already computed and are NOT yours to restate or recompute.
+
+FINDING: ${finding.title}
+WHAT THE RULES MEASURED: ${finding.detail}
+
+THE ACTUAL COMMANDS BEHIND IT:
+${evidence}
+
+AVAILABLE HERE: ${tc.filters ? tc.filters.tool + ' (' + tc.filters.commands.join(' ') + ')' : 'no output-filter proxy'}
+MCP servers: ${tc.mcpServers.join(', ') || 'none'}. Subagents defined: ${tc.agents.join(', ') || 'none'}.
+Hooks: ${tc.hooks.map((h) => h.matcher + ' -> ' + h.runs).join('; ') || 'none'}
+
+Say what this loop was actually trying to do, and what to change. Be concrete and specific to
+these commands — quote them. Only suggest tooling listed as available. Do not state any quantity,
+cost or count: those are already known and yours would be a guess.
+
+Reply with only this JSON:
+{"pattern":"<what the agent was doing, one or two sentences>",
+ "why":"<why it costs turns, specific to these commands>",
+ "fix":["<a concrete change, naming the actual command or file>", "..."],
+ "confidence":"high|medium|low"}`;
+}
+
+// argv, not stdin: execFile's `input` is sync-only, and these CLIs otherwise sit
+// waiting on a pipe that never fills. No shell, so nothing in the prompt is
+// interpreted. Neither runner is allowed to touch the filesystem — it is being
+// asked to read evidence it has already been handed, not to go looking.
+function runnerArgv(runner, model, prompt) {
+  if (runner === 'codex') {
+    return ['codex', ['exec', '--skip-git-repo-check', '-s', 'read-only',
+      ...(model ? ['-m', model] : []), prompt]];
+  }
+  return ['claude', ['-p', prompt, '--output-format', 'json',
+    '--disallowed-tools', 'Bash', 'Edit', 'Write',
+    ...(model ? ['--model', model] : [])]];
+}
+
+function deepen(finding, recs, tc, runner, model, cb) {
+  const evidence = evidenceFor(finding.id, recs);
+  if (!evidence) return cb({ error: 'no evidence to show a model for this finding' });
+  if (!tc.runners.some((r) => r.id === runner)) {
+    invalidateToolchain();
+    return cb({ error: `no ${runner} CLI found on this machine`, runnerGone: true });
+  }
+  const prompt = deepenPrompt(finding, evidence, tc);
+  const started = Date.now();
+  const [bin, args] = runnerArgv(runner, model, prompt);
+  cp.execFile(bin, args,
+    { encoding: 'utf8', timeout: 180000, maxBuffer: 8 << 20 },
+    (err, stdout) => {
+      if (err && !stdout) {
+        // ENOENT means it was uninstalled since we looked. Re-detect so the next
+        // page load stops offering it, and say so rather than showing exec noise.
+        const gone = err.code === 'ENOENT' || /ENOENT|not found/i.test(String(err.message));
+        if (gone) invalidateToolchain();
+        return cb({
+          error: gone ? `${bin} is no longer installed — the list has been refreshed`
+            : `${bin} failed: ${String(err.message).slice(0, 200)}`,
+          runnerGone: gone,
+        });
+      }
+      let env, text;
+      try { env = JSON.parse(stdout); text = env.result || ''; } catch (_) { text = stdout; }
+      let body;
+      try { body = JSON.parse(String(text).replace(/^[^{]*/, '').replace(/[^}]*$/, '')); }
+      catch (_) { return cb({ error: 'the model did not answer in the requested shape', raw: String(text).slice(0, 500) }); }
+      const flagged = unsupportedNumbers(JSON.stringify(body), evidence, finding);
+      cb({
+        pattern: body.pattern, why: body.why, fix: Array.isArray(body.fix) ? body.fix : [],
+        confidence: body.confidence || 'unknown',
+        flagged,                                     // figures with no basis in the evidence
+        ranBy: { runner, model: model || 'default' },
+        cost: { tokens: (env && env.usage) ? (env.usage.input_tokens || 0) + (env.usage.output_tokens || 0) : null,
+          usd: env && env.total_cost_usd != null ? env.total_cost_usd : null,
+          ms: Date.now() - started },
+      });
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Toolchain inventory — what remedies are actually available here
 // ---------------------------------------------------------------------------
 // Advice that names a tool you do not have is worse than no advice, so findings
@@ -1302,6 +1501,11 @@ function advice(sinceMs, includeSub, model, effort, source, repo) {
 // values: these files hold credentials.
 const cp = require('child_process');
 let toolchainCache = null;
+// Detection is cheap and the answer changes when someone installs or removes a
+// CLI, so it is re-taken at startup, every few minutes, and immediately after a
+// runner fails to launch — the case where the cache is provably wrong.
+const TOOLCHAIN_TTL_MS = 5 * 60 * 1000;
+const invalidateToolchain = () => { toolchainCache = null; };
 
 function readJSON(f) {
   try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch (_) { return null; }
@@ -1311,17 +1515,51 @@ function listNames(dir, ext) {
     return fs.readdirSync(dir).filter((f) => f.endsWith(ext)).map((f) => f.slice(0, -ext.length));
   } catch (_) { return []; }
 }
-// fixed argv only, never anything derived from a request
-function tryExec(bin, args) {
+// fixed argv only, never anything derived from a request. A probe that does not
+// answer immediately is treated as absent: burnboard's own features must never
+// wait on an optional tool.
+function tryExec(bin, args, timeout = 1500) {
   try {
-    return cp.execFileSync(bin, args, { encoding: 'utf8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] });
+    return cp.execFileSync(bin, args, { encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'ignore'] });
   } catch (_) { return null; }
 }
 
+// Which assistants are installed and could read a finding. Presence costs a
+// process spawn so it is cached; the model list is derived from the rollups and
+// so is recomputed every time — at startup the inventory is taken before the
+// rollups have loaded, and a cached empty list would outlive the reason for it.
+const RUNNERS = [
+  { id: 'claude', label: 'Claude Code', bin: 'claude', aliases: ['opus', 'sonnet', 'haiku'] },
+  { id: 'codex', label: 'Codex CLI', bin: 'codex', aliases: [] },
+];
+
+function modelsFor(id) {
+  const seen = new Set();
+  for (const r of (rollupCache ? rollupCache.sessions.values() : [])) {
+    // "<synthetic>" and the auto-review label are bookkeeping, not models you
+    // can ask for
+    if (r.model && r.source === id && !r.model.startsWith('<') && r.model !== 'codex-auto-review') {
+      seen.add(r.model);
+    }
+  }
+  const def = RUNNERS.find((r) => r.id === id);
+  return [...new Set([...(def ? def.aliases : []), ...seen])];
+}
+
+const detectRunners = () => RUNNERS.filter((r) => tryExec(r.bin, ['--version']))
+  .map((r) => ({ id: r.id, label: r.label, models: [] }));
+
+// the models a runner offers change as the history does, so fill them in fresh
+const withModels = (tc) => {
+  for (const r of tc.runners) r.models = modelsFor(r.id);
+  return tc;
+};
+
 function detectToolchain() {
-  if (toolchainCache && Date.now() - toolchainCache.at < 5 * 60 * 1000) return toolchainCache.data;
+  if (toolchainCache && Date.now() - toolchainCache.at < TOOLCHAIN_TTL_MS) return withModels(toolchainCache.data);
   const home = os.homedir();
-  const out = { filters: null, mcpServers: [], agents: [], skills: [], hooks: [], plugins: [] };
+  const out = { filters: null, mcpServers: [], agents: [], skills: [], hooks: [], plugins: [], runners: [] };
+  out.runners = detectRunners();
 
   // an output-filtering proxy, if one is installed (rtk is the one this project
   // knows by name; absence just means those remedies are not offered)
@@ -1368,7 +1606,7 @@ function detectToolchain() {
   out.skills = [...new Set(out.skills)];
 
   toolchainCache = { at: Date.now(), data: out };
-  return out;
+  return withModels(out);
 }
 
 // ---------------------------------------------------------------------------
@@ -1495,6 +1733,37 @@ const server = http.createServer((req, res) => {
       q.get('source') || '', q.get('repo') || ''));
   }
 
+  // one finding, read by a model. Explicitly asked for — it spends the user's
+  // own quota, which for a token-economy tool should never happen by surprise.
+  if (pathn === '/api/deepen') {
+    ensureRollups();
+    const q = url.searchParams;
+    const id = q.get('id') || '';
+    const range = q.get('range') || 'all';
+    const sinceMs = range === '7d' ? 7 * 864e5 : range === '30d' ? 30 * 864e5 : 0;
+    const includeSub = q.get('subagents') !== '0';
+    if (!rollupReady) return json(res, 200, { building: true, progress: buildProgress });
+
+    const a = advice(sinceMs, includeSub, q.get('model') || '', q.get('effort') || '',
+      q.get('source') || '', q.get('repo') || '');
+    const finding = a.findings.find((f) => f.id === id);
+    if (!finding) return json(res, 404, { error: 'no such finding in this slice' });
+
+    const runner = q.get('runner') || 'claude';
+    const model = q.get('model2') || '';
+    const key = id + '|' + url.search;
+    if (deepCache.has(key)) return json(res, 200, { ...deepCache.get(key), cached: true });
+
+    const cutoff = sinceMs ? Date.now() - sinceMs : 0;
+    const recs = pickSessions(includeSub, q.get('model') || '', q.get('effort') || '',
+      q.get('source') || '', q.get('repo') || '')
+      .filter((r) => !cutoff || new Date(r.startedAt).getTime() >= cutoff);
+    return deepen(finding, recs, a.toolchain, runner, model, (out) => {
+      if (!out.error) deepCache.set(key, out);
+      json(res, 200, out);
+    });
+  }
+
   // the same slice as /api/economy, read as "what should I change"
   if (pathn === '/api/advice') {
     ensureRollups();
@@ -1551,4 +1820,14 @@ server.listen(PORT, () => {
     console.log(`    watching ${s.watching}`);
   }
   console.log(`  http://localhost:${PORT}`);
+  // Warm the inventory off the hot path. It only decides which *optional* extras
+  // are offered, so it must never delay serving — and none of it is required for
+  // burnboard to do its job.
+  setTimeout(() => {
+    const tc = detectToolchain();
+    console.log(`  optional tools → ${tc.runners.length
+      ? 'can deepen a finding with ' + tc.runners.map((r) => r.id).join(', ')
+      : 'none found; findings stay measurement-only'}`
+      + `${tc.filters ? ` · ${tc.filters.tool} ${tc.filters.version}` : ''}`);
+  }, 0);
 });
