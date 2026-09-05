@@ -8,18 +8,21 @@ burnboard tails the JSONL session transcripts both tools write locally — Codex
 dashboard. No account access, no API keys, nothing sent anywhere. Zero dependencies, Node stdlib
 only.
 
-Every view carries an **All agents / Codex / Claude Code** toggle: see one tool in isolation, or
-both together in a single combined view with each session badged by which agent ran it.
+Every view carries an **All agents / Codex / Claude Code** toggle and a **repository picker**:
+see one tool or one codebase in isolation, or everything together in a single combined view with
+each session badged by which agent ran it.
 
 - **Activity** — one live panel per active agent, refreshed every ~2s, with a
   billed-token consumption chart, the current command history, per-command token deltas, and a
   quota/usage bar (weekly rate-limit % + tokens today/this week).
 - **Subagent lineage** — spawned-by chains up to the root prompt, including Codex's auto-approval
   `guardian` shown nested under the thread it's reviewing.
-- **History** — every past session by day / week / month, sortable, with prompt, model, effort,
-  git branch, billed tokens and command count.
+- **History** — every past session, sortable, with prompt, model, effort, git branch, billed
+  tokens and command count, filtered by clicking the period chart above it.
 - **Trends** — token consumption bucketed over time, split into two lists (by base command, by
-  prompt), each drillable to a per-bucket chart.
+  prompt); click a bar to drill into it, click a row to plot just that command or prompt.
+- **Agents** — the same spend cut by *who* spent it, so agent types can be compared on
+  efficiency rather than volume.
 - **Economy** — a token-waste audit: which commands dump the most output back into context,
   truncation hits, polling/wait round-trips, and commands re-run unchanged.
 
@@ -64,7 +67,28 @@ It reads the flat `projects/<project-slug>/<session-id>.jsonl` transcripts under
 
 ## What it shows
 
-Five tabs: **Running now**, **History**, **Trends**, **Agents**, **Economy**.
+Five tabs: **Activity**, **History**, **Trends**, **Agents**, **Economy**.
+
+### Reading the charts
+
+Trends, History and the per-command panels share one interaction, so the same two gestures work
+everywhere.
+
+**The chart picks *when*.** Every bar is a bucket. Clicking one filters the table below it and
+opens the next granularity down, scoped to what you clicked: month → week → day → hour. An hour
+is the floor; clicking one filters rather than drilling further. The levels you came through stay
+on screen, collapsed, so a sibling bucket is always one click away, with the bar you picked
+highlighted. `↺` steps back one level and `clear` returns to everything; both are offered on an
+empty slice too, so a stray click is never a dead end.
+
+Bar width follows the bucket count, so three months are readable and ninety days stay narrow.
+Below a day, buckets are keyed by the time each *command* ran rather than by session start — but
+only as far back as the sources keep per-command timestamps (~24h). Older sub-day ranges fall
+back to session start time and say so.
+
+**The table picks *what*.** Clicking a row plots just that command, prompt or invocation in the
+charts above, shown as a chip you can clear on its own. The two filters compose: one time slice,
+one subject.
 
 ### Activity
 
@@ -110,22 +134,28 @@ subagents nested under their parent, dot = 🟢 running / 🟡 idle.
 
 ### History
 
-**Day / Week / Month** toggle + a period picker (subagents optional). Table of every session in
-that period (started, thread, prompt, project, model, kind, billed tokens, commands) with a
-totals bar. **Click any column header to sort.** Click a row for the detail panel: full
-message/tool/reasoning timeline, the consumption chart, base-command breakdown, metadata.
+**Hour / Day / Week / Month** toggle, model and effort filters, subagents optional. A
+tokens-per-bucket chart sits above the table and is the date filter — click a bar to scope the
+table to it and drill into its hours. Opens on the most recent bucket.
+
+Table of every session in that slice (started, thread, prompt, project, model, kind, billed
+tokens, commands) with a totals bar. **Click any column header to sort.** Click a row for the
+detail panel: full message/tool/reasoning timeline, the consumption chart, base-command
+breakdown, metadata.
 
 ### Trends
 
-Consumption aggregated over **day / week / month** buckets (toggle top-right; optionally include
-subagents). Shows grand totals, a tokens-per-bucket bar chart, and two independent lists:
+Consumption aggregated over **hour / day / week / month** buckets (toggle top-right; model and
+effort filters; optionally include subagents). Shows grand totals, a tokens-per-bucket bar chart,
+and two independent lists:
 
-- **By base command** — every base command with its all-time token total, run count, and a trend
-  sparkline. Click a row to expand a per-bucket bar chart + table — e.g. how `sed`'s or
-  `apply_patch`'s consumption has moved week to week.
+- **By base command** — every base command with its token total for the current slice, run count,
+  and a trend sparkline.
 - **By prompt** — the same, keyed by each session's opening prompt (near-duplicates merged).
 
-Each list has a filter box.
+Click a bar to drill into that bucket; click a row to plot just that command or prompt over time
+— e.g. how `sed`'s or `apply_patch`'s consumption has moved week to week. Each list has a filter
+box.
 
 ### Agents
 
@@ -160,8 +190,9 @@ Expand a row for:
 - **By command**: which base commands feed the most text back to the model — tokens, calls,
   avg per call, truncation count. Big + frequent = the best places to add `| tail`, `--quiet`,
   `rg` instead of `cat`, or request specific JSON fields. **Click a row** for a plain-language
-  note on what the command does, its actual invocations (with per-invocation output size and
-  truncation), and — for `write_stdin` / `wait` — the underlying processes being polled.
+  note on what the command does, its trend over time (drillable and plottable per invocation,
+  as above), its actual invocations with per-invocation output size and truncation, and — for
+  `write_stdin` / `wait` — the underlying processes being polled.
 - **Biggest single outputs**, **repeated commands**, and **poll-dominated sessions** — each a
   click-through to the session, with a one-line note on what it means.
 
@@ -169,8 +200,8 @@ Output token counts are estimated (~4 chars/token) from the logged tool results.
 reasoning is encrypted in the rollout files, so the "why" behind each step isn't available —
 only what ran and what came back.
 
-Trends and Economy share a one-time streaming scan of every session file (~40s for ~1000
-sessions; only parses relevant lines), cached to `.cache/rollups.json` and refreshed
+History, Trends, Agents and Economy share a one-time streaming scan of every session file (~40s
+for ~1000 sessions; only parses relevant lines), cached to `.cache/rollups.json` and refreshed
 incrementally after.
 
 ## How it works
