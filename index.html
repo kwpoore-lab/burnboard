@@ -1426,7 +1426,14 @@ function bucketTitle(period, b) {
   const a = new Date(r[0]), z = new Date(r[1]);
   const dayStr = `${DOW[a.getDay()]}, ${MON[a.getMonth()]} ${a.getDate()} ${a.getFullYear()}`;
   if (period === 'month') return `${MON[a.getMonth()]} ${a.getFullYear()}`;
-  if (period === 'week') return `Week of ${MON[a.getMonth()]} ${a.getDate()}, ${a.getFullYear()}`;
+  // a week keyed by its Monday looks exactly like a day — spell out the span so
+  // week, day and month bars can never be mistaken for one another
+  if (period === 'week') {
+    const e = new Date(r[1] - 1);
+    const sameYear = a.getFullYear() === e.getFullYear();
+    return `Week of ${MON[a.getMonth()]} ${a.getDate()}${sameYear ? '' : ', ' + a.getFullYear()}`
+      + ` – ${MON[e.getMonth()]} ${e.getDate()}, ${e.getFullYear()}`;
+  }
   if (period === 'day') return dayStr;
   return `${dayStr} · ${hhmm(a)}–${hhmm(new Date(r[1] - 1))}`;
 }
@@ -1466,6 +1473,7 @@ function tbarChart(buckets, valueFn, label, opts = {}) {
   const lblW = Math.max(...buckets.map(b => lbl(b).length)) * 5.8 + 8;
   const step = Math.max(1, Math.ceil(lblW / slot));
   const selIdx = opts.sel ? buckets.indexOf(opts.sel) : -1;
+  const hoverLbl = (b) => opts.period ? bucketTitle(opts.period, b) : b;
   // Ticks sit on an even grid `step` bars apart, anchored on the picked bar. That
   // gives the pick a label without dropping the neighbour it would have crowded —
   // the whole row just shifts, so the spacing stays uniform either way.
@@ -1486,7 +1494,7 @@ function tbarChart(buckets, valueFn, label, opts = {}) {
       <div class="bc-yax">${(opts.drilled ? [1, 0] : [1, 0.5, 0]).map(f => `<span>${kfmt(max * f)}</span>`).join('')}</div>
       <div class="bc-scroll"><div class="bc-inner" style="width:${wantW}px;--bw:${BAR}px">
         <div class="bc-plot${pickAttrs}>
-          ${vals.map((v, i) => `<div class="bc-col${i === selIdx ? ' sel' : ''}" data-b="${attr(buckets[i])}" title="${esc(buckets[i])} — ${fmt(v)}"
+          ${vals.map((v, i) => `<div class="bc-col${i === selIdx ? ' sel' : ''}" data-b="${attr(buckets[i])}" title="${attr(hoverLbl(buckets[i]))} — ${fmt(v)}"
             ><div class="bc-bar" style="height:${(v / max * 100).toFixed(1)}%"></div></div>`).join('')}
           ${lineSvg}
         </div>
