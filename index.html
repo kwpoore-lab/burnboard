@@ -2270,12 +2270,18 @@ async function loadEconomy() {
   renderEconomy();
   // findings describe the same slice, so they follow the same filters
   adviceData = null;
-  fetch(`/api/advice?${qs}`).then(x => x.json()).then(a => {
-    if (a.building) return;
+  const say = (html) => { const host = $('#findings'); if (host) host.innerHTML = html; };
+  fetch(`/api/advice?${qs}`).then((x) => {
+    // a long-running server from before this route existed answers 404 — say so
+    // rather than sitting on the placeholder forever
+    if (x.status === 404) throw new Error('this burnboard process predates the findings API — restart it to pick them up');
+    if (!x.ok) throw new Error(`the server answered ${x.status}`);
+    return x.json();
+  }).then((a) => {
+    if (a.building) { say('<p class="blurb">Still building the rollup cache…</p>'); return; }
     adviceData = a;
-    const host = $('#findings');
-    if (host) host.innerHTML = findingsHTML(a);
-  }).catch(() => {});
+    say(findingsHTML(a));
+  }).catch((e) => say(`<p class="blurb">Couldn't read the findings — ${esc(e.message)}.</p>`));
 }
 
 // What to change, ranked. Turn cost and carried context are different
