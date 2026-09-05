@@ -1933,7 +1933,7 @@ function ctPanel(base) {
     .map(r => ({ ...r, count: (r.per[sel] || {}).calls || 0, out: (r.per[sel] || {}).outTokens || 0 }))
     .filter(r => r.count || r.out)
     .sort((a, b) => b.out - a.out || b.count - a.count);
-  const sampRows = (rows, kind) => cut(rows).map(r => {
+  const sampRows = (rows, kind) => rows.map(r => {
     const on = s.entity && s.entity.kind === kind && s.entity.key === r.cmd;
     return `<tr class="ctrow${on ? ' on' : ''}" data-ct-row="${attr(r.cmd)}" data-ct-kind="${kind}"
       data-ct-rowbase="${attr(base)}" title="plot just this one above">
@@ -1943,15 +1943,25 @@ function ctPanel(base) {
       <td class="trend-cell">${tspark(r.per, B, rpf)}</td></tr>`;
   }).join('');
 
-  const realSamples = (d.samples || []).filter(x => x.cmd && x.cmd !== base && x.cmd.length > base.length + 1);
-  const samplesTbl = realSamples.length ? `
+  // Prefer invocations that say more than the base name already does — a bare
+  // "git" row next to "git status" and "git diff" is noise. But a command that
+  // takes no arguments (wait, wait_agent) only ever records the base itself, and
+  // dropping that left the panel claiming nothing ran while the chart above
+  // counted the calls. So it is a preference, not a rule.
+  const named = (d.samples || []).filter(x => x.cmd);
+  const realSamples = named.filter(x => x.cmd !== base && x.cmd.length > base.length + 1);
+  // cut to the picked bucket first, so an empty table and the "nothing ran"
+  // message can never both be wrong about the same slice
+  const sampCut = cut(realSamples.length ? realSamples : named);
+  const pollCut = cut(d.pollTargets || []);
+  const samplesTbl = sampCut.length ? `
     <p class="subh" style="margin-top:10px">Actual invocations — click a row to plot it above</p>
     <table><thead><tr><th>Command</th><th class="num">Runs</th><th class="num">~Out tok</th><th class="trend-cell">Trend</th></tr></thead>
-    <tbody>${sampRows(realSamples, 'samp')}</tbody></table>` : '';
-  const pollsTbl = (d.pollTargets || []).length ? `
+    <tbody>${sampRows(sampCut, 'samp')}</tbody></table>` : '';
+  const pollsTbl = pollCut.length ? `
     <p class="subh" style="margin-top:10px">Processes being polled — click a row to plot it above</p>
     <table><thead><tr><th>Process</th><th class="num">Polls</th><th class="num">~Tokens</th><th class="trend-cell">Trend</th></tr></thead>
-    <tbody>${sampRows(d.pollTargets, 'poll')}</tbody></table>` : '';
+    <tbody>${sampRows(pollCut, 'poll')}</tbody></table>` : '';
 
   return ctrls + grand + charts + scope
     + (samplesTbl || pollsTbl
