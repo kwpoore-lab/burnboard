@@ -38,11 +38,12 @@ const IDLE_MS = 5 * 60 * 1000; // yellow dot
 const createCodexSource = require('./lib/sources/codex');
 const createClaudeSource = require('./lib/sources/claude');
 const SOURCES = [createCodexSource({ argVal }), createClaudeSource({ argVal })];
-// Per-command timestamps are only retained for the recent past (the sources drop
-// older ones to keep the rollup cache small), so a drill-down below a day can
-// only be bucketed by command time inside this window. Older sub-day ranges fall
-// back to bucketing each session at its start, the way day/week/month do.
-const CMD_DETAIL_MS = Math.min(...SOURCES.map((s) => s.recentCmdMs || 24 * 3600 * 1000));
+// How far back per-command timestamps go. A source reporting null keeps them for
+// the whole transcript, so sub-day drilling is exact over all history; one that
+// reports a window makes older sub-day ranges fall back to bucketing each session
+// at its start, the way day/week/month do.
+const CMD_DETAIL_MS = SOURCES.some((s) => s.recentCmdMs == null)
+  ? Infinity : Math.min(...SOURCES.map((s) => s.recentCmdMs));
 const SOURCE_BY_ID = new Map(SOURCES.map((s) => [s.id, s]));
 
 // ---------------------------------------------------------------------------
@@ -346,7 +347,7 @@ let building = false;
 let rollupReady = false;
 let buildProgress = { done: 0, total: 0 };
 
-const ROLLUP_VERSION = 19;   // bump to force a full re-scan when the parser changes
+const ROLLUP_VERSION = 20;   // bump to force a full re-scan when the parser changes
 function loadRollupCache() {
   try {
     const j = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
@@ -431,8 +432,9 @@ const CMD_TIME_PERIODS = new Set(['hour', 'hourly', 'slot']);
 const PERIODS = ['month', 'week', 'day', 'hourly', 'slot', 'hour'];
 
 // A sub-day range can only be bucketed by command time while the sources still
-// hold per-command timestamps for it.
-const hasCmdTimes = (from) => from == null || from >= Date.now() - CMD_DETAIL_MS;
+// hold per-command timestamps for it. Infinity means they always do.
+const hasCmdTimes = (from) => from == null || CMD_DETAIL_MS === Infinity
+  || from >= Date.now() - CMD_DETAIL_MS;
 
 // ?from=&to= (epoch ms) scope a chart drill-down to one clicked bucket
 function drillRange(q) {

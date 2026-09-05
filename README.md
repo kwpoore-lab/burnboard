@@ -203,9 +203,9 @@ plugins, and the Bash hooks in `settings.json` — and only suggests what you ca
 names, never values, since those files hold credentials. No model is involved: every number is
 computed from your own history, so nothing is invented.
 
-Carried-context figures are exact over the calls that still have per-command timestamps (the
-coverage is stated inline) and the per-turn cost is a per-session average, which understates
-polls because they cluster late in a session when the context is largest.
+Carried-context figures are exact over the calls that have per-command timestamps — normally all
+of them, and the coverage is stated inline either way. The per-turn cost is a per-session average,
+which understates polls because they cluster late in a session when the context is largest.
 
 - **Headline cards**: total command-output tokens read back into context, results truncated at
   the output limit, polling/waiting round-trips (empty `write_stdin` / `wait` / bare
@@ -224,9 +224,11 @@ Output token counts are estimated (~4 chars/token) from the logged tool results.
 reasoning is encrypted in the rollout files, so the "why" behind each step isn't available —
 only what ran and what came back.
 
-History, Trends, Agents and Economy share a one-time streaming scan of every session file (~40s
-for ~1000 sessions; only parses relevant lines), cached to `.cache/rollups.json` and refreshed
-incrementally after.
+History, Trends, Agents and Economy share a one-time streaming scan of every session file
+(~70s for ~1100 sessions across ~12GB of transcripts; only parses relevant lines), cached to
+`.cache/rollups.json` and refreshed incrementally after. The cache keeps every command's
+timestamp, which is what makes sub-day drilling exact over all history — roughly 30MB and 170MB
+resident for ~124k commands. Bumping `ROLLUP_VERSION` invalidates it and re-scans once.
 
 ## How it works
 
@@ -287,9 +289,10 @@ and live threads carry the same value as `repoKey`.
 charts drill down: clicking a month asks for its weeks, a week for its days, a day for its hours.
 An hour is as fine as the drill goes — clicking one filters rather than opening a further level.
 (`slot`, the 5-minute bucket, still backs the live Hour view.) Below a day the buckets are keyed
-by the time each *command* ran rather than by session start — but only as far back as the sources
-keep per-command timestamps (24h); older sub-day ranges fall back to session start time and
-report `byCommandTime: false`.
+by the time each *command* ran rather than by session start, which holds for the whole history:
+the sources keep per-command timestamps for the life of each transcript. A source that only kept
+a recent window would make older ranges fall back to session start and report
+`byCommandTime: false`.
 
 ## Trademarks
 
