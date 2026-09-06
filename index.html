@@ -2335,7 +2335,7 @@ function findingsHTML(a) {
     ${runners.length ? `<div class="deepbar">
       <span>To go further, have an assistant read the actual commands behind a finding.
       It runs only when you ask it to, and spends your own quota.</span>
-      <label>read with
+      <label>dive deeper with
         <select id="deepRunner">${runners.map(r => `<option value="${attr(r.id)}">${esc(r.label)}</option>`).join('')}</select>
         <select id="deepModel">${(runners[0].models || []).map(m => `<option value="${attr(m)}">${esc(m)}</option>`).join('')
           || '<option value="">default</option>'}</select>
@@ -2350,7 +2350,7 @@ function findingsHTML(a) {
       </div>
       <div class="f-detail">${esc(f.detail)}</div>
       <ul class="f-fix">${f.remedies.map(r => `<li>${esc(r)}</li>`).join('')}</ul>
-      ${!runners.length ? '' : `<div class="f-deep">${deepened.has(f.id) ? deepHTML(deepened.get(f.id))
+      ${!runners.length || f.deepenable === false ? '' : `<div class="f-deep">${deepened.has(f.id) ? deepHTML(deepened.get(f.id))
         : `<button class="deepen" data-deepen="${attr(f.id)}">dive deeper →</button>`}</div>`}
     </div>`).join('')}`;
 }

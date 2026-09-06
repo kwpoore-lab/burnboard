@@ -1287,6 +1287,8 @@ function advice(sinceMs, includeSub, model, effort, source, repo) {
   }
 
   findings.sort((a, b) => (b.turnTokens - a.turnTokens) || (b.carried - a.carried));
+  // a finding with nothing to show a model must not offer to show one
+  for (const f of findings) f.deepenable = !!evidenceFor(f.id, recs);
   return {
     building: !rollupReady, progress: buildProgress,
     scope: { sessions: recs.length, toolCalls: calls, billed, perTurn, carryCoveragePct: Math.round(carry.coverage * 100) },
@@ -1332,6 +1334,41 @@ function evidenceFor(id, recs) {
       }
       lines.push('What followed the run:');
       for (const x of best.c.slice(best.j, best.j + 5)) lines.push(`  ${x.t} ${x.b}  ${short(x.c)}`);
+    }
+  }
+
+  if (kind === 'polls') {
+    // what is being polled, and what started it — the useful question here is
+    // whether the thing being waited on could have been waited on once
+    const targets = new Map();
+    const worst = [];
+    for (const r of recs) {
+      for (const pt of r.pollTargets || []) {
+        targets.set(pt.cmd, (targets.get(pt.cmd) || 0) + (pt.count || 0));
+      }
+      if ((r.toolCalls || 0) >= 40 && (r.pollTurns || 0) / r.toolCalls > 0.4) {
+        worst.push({ pct: Math.round(100 * r.pollTurns / r.toolCalls), n: r.pollTurns, prompt: r.prompt });
+      }
+    }
+    const top = [...targets.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+    if (top.length) {
+      lines.push('Processes being polled, and how many polls each drew:');
+      for (const [cmd, n] of top) lines.push(`  ${n}x  ${short(cmd)}`);
+    }
+    lines.push('', 'Poll calls as they were actually issued:');
+    const samples = new Set();
+    for (const r of recs) {
+      for (const x of r.recentCmds || []) {
+        if (POLL_BASES.has(x.b) && samples.size < 8) samples.add(`  ${x.b}  ${short(x.c)}`);
+      }
+      if (samples.size >= 8) break;
+    }
+    lines.push(...samples);
+    if (worst.length) {
+      lines.push('', 'Sessions that spent most of their turns polling:');
+      for (const w of worst.sort((a, b) => b.pct - a.pct).slice(0, 5)) {
+        lines.push(`  ${w.pct}% of turns (${w.n} polls) — ${short(w.prompt)}`);
+      }
     }
   }
 
@@ -1451,6 +1488,42 @@ function runnerArgv(runner, model, prompt) {
     ...(model ? ['--model', model] : [])]];
 }
 
+// A CLI's stdout is not necessarily JSON. Codex prints a banner, the reply, then
+// a token footer; taking everything between the first "{" and the last "}" spans
+// all of it. Walk the string instead and collect whole balanced objects.
+function extractJson(text) {
+  const str = String(text || '');
+  const found = [];
+  for (let i = 0; i < str.length; i++) {
+    if (str[i] !== '{') continue;
+    let depth = 0, inStr = false, esc = false;
+    for (let j = i; j < str.length; j++) {
+      const ch = str[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') inStr = true;
+      else if (ch === '{') depth++;
+      else if (ch === '}' && --depth === 0) {
+        try { found.push(JSON.parse(str.slice(i, j + 1))); } catch (_) {}
+        i = j;
+        break;
+      }
+    }
+  }
+  // the answer is the last object that looks like the shape we asked for
+  return found.reverse().find((o) => o && (o.pattern || o.fix)) || found[0] || null;
+}
+
+// codex reports usage as a "tokens used" line rather than in a JSON envelope
+function codexTokens(text) {
+  const m = /tokens used[\s\S]{0,20}?([\d,]+)/i.exec(String(text || ''));
+  return m ? Number(m[1].replace(/,/g, '')) : null;
+}
+
 function deepen(finding, recs, tc, runner, model, cb) {
   const evidence = evidenceFor(finding.id, recs);
   if (!evidence) return cb({ error: 'no evidence to show a model for this finding' });
@@ -1475,18 +1548,19 @@ function deepen(finding, recs, tc, runner, model, cb) {
           runnerGone: gone,
         });
       }
-      let env, text;
-      try { env = JSON.parse(stdout); text = env.result || ''; } catch (_) { text = stdout; }
-      let body;
-      try { body = JSON.parse(String(text).replace(/^[^{]*/, '').replace(/[^}]*$/, '')); }
-      catch (_) { return cb({ error: 'the model did not answer in the requested shape', raw: String(text).slice(0, 500) }); }
+      let env = null, text = stdout;
+      try { const j = JSON.parse(stdout); if (j && typeof j === 'object' && 'result' in j) { env = j; text = j.result || ''; } }
+      catch (_) { /* not an envelope — the raw transcript is the text */ }
+      const body = extractJson(text);
+      if (!body) return cb({ error: 'the model did not answer in the requested shape', raw: String(text).slice(-500) });
       const flagged = unsupportedNumbers(JSON.stringify(body), evidence, finding);
       cb({
         pattern: body.pattern, why: body.why, fix: Array.isArray(body.fix) ? body.fix : [],
         confidence: body.confidence || 'unknown',
         flagged,                                     // figures with no basis in the evidence
         ranBy: { runner, model: model || 'default' },
-        cost: { tokens: (env && env.usage) ? (env.usage.input_tokens || 0) + (env.usage.output_tokens || 0) : null,
+        cost: { tokens: (env && env.usage) ? (env.usage.input_tokens || 0) + (env.usage.output_tokens || 0)
+          : codexTokens(text),
           usd: env && env.total_cost_usd != null ? env.total_cost_usd : null,
           ms: Date.now() - started },
       });
