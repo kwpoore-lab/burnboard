@@ -1534,9 +1534,9 @@ function deepen(finding, recs, tc, runner, model, cb) {
   const prompt = deepenPrompt(finding, evidence, tc);
   const started = Date.now();
   const [bin, args] = runnerArgv(runner, model, prompt);
-  cp.execFile(bin, args,
+  const child = cp.execFile(bin, args,
     { encoding: 'utf8', timeout: 180000, maxBuffer: 8 << 20 },
-    (err, stdout) => {
+    (err, stdout, stderr) => {
       if (err && !stdout) {
         // ENOENT means it was uninstalled since we looked. Re-detect so the next
         // page load stops offering it, and say so rather than showing exec noise.
@@ -1551,8 +1551,16 @@ function deepen(finding, recs, tc, runner, model, cb) {
       let env = null, text = stdout;
       try { const j = JSON.parse(stdout); if (j && typeof j === 'object' && 'result' in j) { env = j; text = j.result || ''; } }
       catch (_) { /* not an envelope — the raw transcript is the text */ }
-      const body = extractJson(text);
-      if (!body) return cb({ error: 'the model did not answer in the requested shape', raw: String(text).slice(-500) });
+      // some CLIs put their banner and any complaint on stderr, so when stdout
+      // is silent that is where the reason lives
+      const body = extractJson(text) || extractJson(stderr);
+      if (!body) {
+        const shown = (String(text).trim() || String(stderr).trim() || '(both stdout and stderr were empty)');
+        return cb({
+          error: `${bin} did not answer in the requested shape`,
+          raw: shown.slice(-600),
+        });
+      }
       const flagged = unsupportedNumbers(JSON.stringify(body), evidence, finding);
       cb({
         pattern: body.pattern, why: body.why, fix: Array.isArray(body.fix) ? body.fix : [],
@@ -1560,11 +1568,15 @@ function deepen(finding, recs, tc, runner, model, cb) {
         flagged,                                     // figures with no basis in the evidence
         ranBy: { runner, model: model || 'default' },
         cost: { tokens: (env && env.usage) ? (env.usage.input_tokens || 0) + (env.usage.output_tokens || 0)
-          : codexTokens(text),
+          : codexTokens(text) || codexTokens(stderr),   // codex reports usage on stderr
           usd: env && env.total_cost_usd != null ? env.total_cost_usd : null,
           ms: Date.now() - started },
       });
     });
+  // The prompt is already in argv, but a CLI whose stdin is an open pipe may sit
+  // waiting for more of it — codex prints "Reading additional input from stdin"
+  // and blocks forever. Give it EOF immediately.
+  if (child.stdin) child.stdin.end();
 }
 
 // ---------------------------------------------------------------------------

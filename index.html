@@ -315,6 +315,8 @@
   .ai-p b { color: var(--fg); }
   .ai-fix { margin: 6px 0; padding-left: 18px; font-size: 12.5px; line-height: 1.6; }
   .ai-fix li { margin-bottom: 4px; }
+  .ai-raw { font: 10.5px/1.5 var(--mono); color: var(--dim); white-space: pre-wrap;
+    margin-top: 6px; max-height: 120px; overflow: auto; }
 
   /* economy */
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin: 4px 0 18px; }
@@ -2360,7 +2362,8 @@ function findingsHTML(a) {
 // carrying no numbers of its own.
 function deepHTML(d) {
   if (d.pending) return '<div class="ai pending">reading the commands behind this finding…</div>';
-  if (d.error) return `<div class="ai err">Couldn't read this one — ${esc(d.error)}</div>`;
+  if (d.error) return `<div class="ai err">Couldn't read this one — ${esc(d.error)}${
+    d.raw ? `<div class="ai-raw">${esc(String(d.raw).slice(-400))}</div>` : ''}</div>`;
   return `<div class="ai">
     <div class="ai-tag">read by ${esc((d.ranBy && d.ranBy.runner) || 'a model')}${
       d.ranBy && d.ranBy.model && d.ranBy.model !== 'default' ? ' · ' + esc(d.ranBy.model) : ''
