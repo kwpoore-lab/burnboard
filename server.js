@@ -5,7 +5,11 @@
  * burnboard — live + historical monitor for Codex CLI and Claude Code usage
  * Zero dependencies. Node stdlib only.
  *
- *   node server.js [--port 4317] [--root ~/.codex] [--claude-root ~/.claude]
+ *   node server.js [--port 4317] [--root ~/.codex] [--claude-root ~/.claude] [--no-ai]
+ *
+ *   --no-ai   never call an assistant. No CLI is probed for, none is offered,
+ *             and /api/deepen refuses. Everything else is unaffected: findings
+ *             are measured from your own history and need no model.
  */
 
 const http = require('http');
@@ -22,6 +26,10 @@ function argVal(name, def) {
   return i >= 0 && args[i + 1] ? args[i + 1] : def;
 }
 const PORT = parseInt(argVal('--port', process.env.PORT || '4317'), 10);
+// Opting out of the model layer entirely. Off means off: no probing for an
+// assistant CLI, nothing offered in the UI, and the endpoint refuses — so
+// burnboard cannot spend a token on your behalf even by accident.
+const AI_DISABLED = args.includes('--no-ai') || process.env.BURNBOARD_NO_AI === '1';
 
 const TICK_MS = 2000;          // rescan cadence
 const LIVE_WINDOW_MS = 15 * 60 * 1000;   // show in live feed if touched within this
@@ -1632,8 +1640,9 @@ function modelsFor(id) {
   return [...new Set([...(def ? def.aliases : []), ...seen])];
 }
 
-const detectRunners = () => RUNNERS.filter((r) => tryExec(r.bin, ['--version']))
-  .map((r) => ({ id: r.id, label: r.label, models: [] }));
+const detectRunners = () => AI_DISABLED ? []
+  : RUNNERS.filter((r) => tryExec(r.bin, ['--version']))
+    .map((r) => ({ id: r.id, label: r.label, models: [] }));
 
 // the models a runner offers change as the history does, so fill them in fresh
 const withModels = (tc) => {
@@ -1822,6 +1831,7 @@ const server = http.createServer((req, res) => {
   // one finding, read by a model. Explicitly asked for — it spends the user's
   // own quota, which for a token-economy tool should never happen by surprise.
   if (pathn === '/api/deepen') {
+    if (AI_DISABLED) return json(res, 403, { error: 'model analysis is switched off (--no-ai)', disabled: true });
     ensureRollups();
     const q = url.searchParams;
     const id = q.get('id') || '';
@@ -1911,8 +1921,8 @@ server.listen(PORT, () => {
   // burnboard to do its job.
   setTimeout(() => {
     const tc = detectToolchain();
-    console.log(`  optional tools → ${tc.runners.length
-      ? 'can deepen a finding with ' + tc.runners.map((r) => r.id).join(', ')
+    console.log(`  optional tools → ${AI_DISABLED ? 'model analysis off (--no-ai)'
+      : tc.runners.length ? 'can deepen a finding with ' + tc.runners.map((r) => r.id).join(', ')
       : 'none found; findings stay measurement-only'}`
       + `${tc.filters ? ` · ${tc.filters.tool} ${tc.filters.version}` : ''}`);
   }, 0);

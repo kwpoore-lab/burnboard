@@ -45,7 +45,12 @@ cd burnboard
 node server.js            # -> http://localhost:4317
 ```
 
-Options: `--port 8080`, `--root /path/to/.codex`, `--claude-root /path/to/.claude`.
+Options: `--port 8080`, `--root /path/to/.codex`, `--claude-root /path/to/.claude`, `--no-ai`.
+
+`--no-ai` (or `BURNBOARD_NO_AI=1`) switches off the model layer completely: no assistant CLI is
+probed for, none is offered in the UI, and `/api/deepen` refuses with 403 — so burnboard cannot
+spend a token on your behalf even by accident. Nothing else changes. Findings are measured from
+your own history and never needed a model.
 
 The page is read fresh on every request, so UI changes only need a browser reload — but the
 server holds its routes in memory. After pulling a new version, restart the process, or a page
@@ -219,8 +224,8 @@ quantity it states anyway that is absent from the evidence it was shown is flagg
 as invented. Its answer is boxed, labelled with the runner and model that wrote it, and carries
 what the call cost you.
 
-With no assistant installed there is nothing to click and nothing missing: findings are the
-product, not a teaser for one. Detection is re-taken at startup, every few minutes, and
+With no assistant installed — or with `--no-ai` — there is nothing to click and nothing missing:
+findings are the product, not a teaser for one. Detection is re-taken at startup, every few minutes, and
 immediately after a runner fails to launch, so removing one heals itself.
 
 Carried-context figures are exact over the calls that have per-command timestamps — normally all
@@ -294,7 +299,7 @@ is source-agnostic and simply carries a `source` tag through to the UI.
 | `GET /api/agents?range=all\|30d\|7d&by=agent\|role\|model\|effort\|project` | per-agent-type spend, efficiency rates and command-class mix |
 | `GET /api/economy?range=all\|30d\|7d&subagents=0\|1&source=codex\|claude` | token-economy signals from the same rollups |
 | `GET /api/advice?range=&subagents=&model=&effort=&source=&repo=` | findings for the same slice as `/api/economy`, plus the detected toolchain |
-| `GET /api/deepen?id=<finding>&runner=claude\|codex&model2=` | runs the chosen local assistant over one finding's evidence (opt-in; spends your quota) |
+| `GET /api/deepen?id=<finding>&runner=claude\|codex&model2=` | runs the chosen local assistant over one finding's evidence (opt-in; spends your quota; 403 under `--no-ai`) |
 | `GET /api/facets` | the model / effort / repo values the filters offer |
 
 Every session record carries `source` (`"codex"` or `"claude"`). The aggregate endpoints accept
