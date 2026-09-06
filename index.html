@@ -81,9 +81,23 @@
     width: 1px; height: 34px; background: var(--border); }
   .focus.nested { background: var(--panel2); }
   .focus.nested .ftitle { font-size: 13.5px; }
-  .fhead { display: flex; align-items: center; gap: 8px; cursor: pointer; flex-wrap: wrap; }
+  /* negative margin cancels the padding, so the hover band costs no layout */
+  .fhead { display: flex; align-items: center; gap: 8px; cursor: pointer; flex-wrap: wrap;
+    margin: -4px -7px 0; padding: 4px 7px; border-radius: 7px; transition: background .12s; }
+  .fhead:hover { background: rgba(88, 166, 255, .07); }
   .caret { display: inline-block; color: var(--dim); font-size: 11px; transition: transform .12s; width: 10px; }
   .focus.expanded .caret { transform: rotate(90deg); }
+  /* a bare chevron reads as decoration — this says, in words, that the panel
+     opens, and lights up with the row so the whole header looks pressable */
+  .expander { display: inline-flex; align-items: center; gap: 5px; flex: none;
+    font: 10px/1.5 var(--mono); text-transform: uppercase; letter-spacing: .6px;
+    color: var(--dim); background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 1px 9px 1px 7px; white-space: nowrap;
+    transition: color .12s, border-color .12s, background .12s; }
+  .expander i { font-style: normal; font-size: 9px; transition: transform .15s; }
+  .focus.expanded .expander i { transform: rotate(90deg); }
+  .fhead:hover .expander { color: var(--accent); border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 16%, var(--panel2)); }
   .fhead-tok { margin-left: auto; font: 11.5px/1 var(--mono); color: var(--dim); white-space: nowrap; }
   .tl-link { font-size: 11.5px; }
   .fhead-tok + .tl-link { margin-left: 12px; }
@@ -156,6 +170,17 @@
   .ev .et { font: 10px/1.4 var(--mono); color: var(--dim); }
   .ev.user { border-color: var(--accent); } .ev.assistant { border-color: var(--green); }
   .ev.tool { border-color: var(--purple); } .ev.reasoning { border-color: var(--yellow); }
+  /* the row a chart click landed on — fades once you have found it */
+  .ev.jump { background: rgba(210, 153, 34, .14); border-color: var(--yellow);
+    animation: evjump 2.2s ease-out; }
+  @keyframes evjump { from { background: rgba(210, 153, 34, .34); } }
+  svg.chart[data-chart-clickable] { cursor: crosshair; }
+  /* jumping scrolls the chart off the top otherwise, so the second click has
+     nothing to aim at — pin it and the timeline moves underneath it. Full-bleed
+     to the panel edges, or rows scroll through the gap beside it. */
+  #detail .chartwrap { position: sticky; top: -18px; z-index: 2;
+    margin: 8px -22px; padding: 26px 22px 4px; border-radius: 0;
+    border-left: 0; border-right: 0; }
   .ev pre { margin: 3px 0 0; white-space: pre-wrap; word-break: break-word; font-family: var(--mono);
     font-size: 11.5px; background: var(--panel); padding: 7px 9px; border-radius: 4px;
     max-height: 260px; overflow: auto; }
@@ -264,6 +289,9 @@
     border-radius: 5px; padding: 3px 9px; font: inherit; font-size: 11px; cursor: pointer; }
   .scopebar button:hover { color: var(--fg); border-color: var(--dim); }
   .scopebar .undo { font-size: 13px; line-height: 1; padding: 3px 8px; }
+  /* says why the row filter you had is gone, so the reset is never silent */
+  .scopebar .dropped { font-size: 11.5px; color: var(--yellow); font-family: var(--mono); }
+  .scopebar .dropped b { color: var(--fg); font-weight: 500; }
   /* the same escape hatch, sitting at the end of an empty-slice message */
   button.undo.inline { background: var(--panel2); color: var(--accent); border: 1px solid var(--border);
     border-radius: 5px; padding: 1px 7px; margin-left: 6px; font: inherit; font-size: 13px;
@@ -833,7 +861,7 @@ function focusBlock(t, depth) {
     <div class="focus ${open ? 'expanded' : ''} ${nested ? 'nested' : ''}" data-id="${t.id}"
          style="--mcol:${mstyle.color}">
       <div class="fhead" onclick="toggleExp('${t.id}')">
-        <span class="caret">▸</span>
+        <span class="expander"><i>▸</i>${open ? 'hide' : 'details'}</span>
         <span class="dot ${t.status}"></span>
         ${nested && (t.agentKind || t.agentNickname) ? `<span class="badge agent">${esc(t.agentKind || t.agentNickname)}</span>` : ''}
         <span class="ftitle">${esc(name)}</span>
@@ -845,7 +873,7 @@ function focusBlock(t, depth) {
       <div class="fmeta">${proj}${mtag ? ' · ' + mtag : ''}${t.effort ? ' · effort:' + esc(t.effort) : ''}${t.serviceTier ? ' · ' + esc(t.serviceTier) : ''}</div>
       ${nested ? '' : lineageLine(t)}
       <div class="promptmini" data-tip-id="${t.id}">${esc(promptLine)}</div>
-      <div class="chartwrap">${consumptionChart(t.tokenSeries, open ? 230 : (nested ? 92 : 140))}</div>
+      <div class="chartwrap">${consumptionChart(t.tokenSeries, open ? 230 : (nested ? 92 : 140), true, t.id)}</div>
 
       <div class="fdetail">
         <div class="fpath">${esc(t.cwd || '')}</div>
@@ -926,7 +954,18 @@ function kfmtN(v) {
 //  bars      = per-turn tokens
 //  dashed markers = context compactions (raw counter reset points)
 // ---------------------------------------------------------------------------
-function consumptionChart(series, H) {
+// The four disjoint buckets a request is billed in, stacked bottom-up in this
+// order. Cache read is the cheap reused context and dwarfs the rest, so it is
+// muted; the buckets you pay full rate for are the bright ones.
+const TOK_PARTS = [
+  { k: 'cr', label: 'cache read', color: 'var(--dim)', op: 0.3 },
+  { k: 'cc', label: 'cache write', color: 'var(--purple)', op: 0.75 },
+  { k: 'i', label: 'input', color: 'var(--accent)', op: 0.85 },
+  { k: 'o', label: 'output', color: 'var(--green)', op: 0.9 },
+];
+const partsTotal = (p) => TOK_PARTS.reduce((a, q) => a + (p[q.k] || 0), 0);
+
+function consumptionChart(series, H, clickable, threadId) {
   H = H || 230;
   if (!series || series.length < 2)
     return `<svg class="chart" viewBox="0 0 800 ${H}" style="height:${H}px"><text x="12" y="24">Not enough data yet…</text></svg>`;
@@ -948,17 +987,35 @@ function consumptionChart(series, H) {
   const pad = rawRange * 0.12;
   const base = minC - pad, cMax = rawRange + pad * 2;
   const yC = (v) => PT + ih - ((v - base) / cMax) * ih;
-  const lastMax = Math.max(...series.map(p => p.last || 0)) || 1;
 
   let d = `M ${x(times[0]).toFixed(1)} ${yC(cum[0]).toFixed(1)}`;
   cum.forEach((v, i) => { d += ` L ${x(times[i]).toFixed(1)} ${yC(v).toFixed(1)}`; });
   const area = d + ` L ${x(times[times.length - 1]).toFixed(1)} ${(PT + ih).toFixed(1)} L ${x(times[0]).toFixed(1)} ${(PT + ih).toFixed(1)} Z`;
 
   const bw = Math.max(1, iw / series.length * 0.6);
+  // Stacked bottom-up, biggest bucket first: cache read is usually ~90%+ of a
+  // request, so it forms the base and the parts you actually pay full rate for
+  // ride on top, where the eye can find them against the bar's edge.
+  const stacked = series.some(p => partsTotal(p) > 0);
+  const barVal = (p) => stacked ? partsTotal(p) : (p.last || 0);
+  const lastMax = Math.max(...series.map(barVal)) || 1;
   const bars = series.map((p, i) => {
-    if (!p.last) return '';
-    const bh = (p.last / lastMax) * ih * 0.55;
-    return `<rect x="${(x(times[i]) - bw / 2).toFixed(1)}" y="${(PT + ih - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="var(--purple)" opacity="0.2"/>`;
+    const tot = barVal(p);
+    if (!tot) return '';
+    const bh = (tot / lastMax) * ih * 0.55;
+    const bx = (x(times[i]) - bw / 2).toFixed(1);
+    if (!stacked)
+      return `<rect x="${bx}" y="${(PT + ih - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="var(--purple)" opacity="0.2"/>`;
+    let y = PT + ih;
+    const segs = TOK_PARTS.map(q => {
+      const v = p[q.k] || 0;
+      if (!v) return '';
+      const h = (v / tot) * bh;
+      y -= h;
+      return `<rect x="${bx}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${q.color}" opacity="${q.op}"/>`;
+    }).join('');
+    return `<g><title>${hhmmss(p.t)} — ${fmt(tot)} billed\n${TOK_PARTS.map(q =>
+      `${q.label}: ${fmt(p[q.k] || 0)}`).join('\n')}</title>${segs}</g>`;
   }).join('');
 
   const marks = series.map((p, i) => p.reset
@@ -972,14 +1029,27 @@ function consumptionChart(series, H) {
     grid += `<text x="${PL - 6}" y="${(yy + 3).toFixed(1)}" text-anchor="end">${kfmt(v)}</text>`;
   }
   const tlabel = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  // the cumulative line climbs left-to-right, so the top-left corner is the one
+  // reliably empty spot to name the stack's colours in
+  const legend = (!stacked || H < 130) ? '' : TOK_PARTS.map((q, i) => {
+    const ly = PT + 11 + i * 12;
+    return `<rect x="${PL + 6}" y="${ly - 7}" width="7" height="7" fill="${q.color}" opacity="${q.op}"/>`
+      + `<text x="${PL + 18}" y="${ly}">${q.label}</text>`;
+  }).join('');
+  // threadId marks a chart whose timeline lives elsewhere — the handler opens
+  // that session before jumping, rather than searching the page it sits on
+  const chartClass = clickable ? ` data-chart-clickable="1" data-t0="${t0}" data-t1="${t1}"`
+    + (threadId ? ` data-thread="${attr(threadId)}"` : '') : '';
 
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" style="height:${H}px" preserveAspectRatio="none">
+  return `<svg class="chart"${chartClass} viewBox="0 0 ${W} ${H}" style="height:${H}px" preserveAspectRatio="none">
     ${grid}${bars}${marks}
     <path d="${area}" fill="var(--accent)" opacity="0.08"/>
     <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.3" stroke-linejoin="round"/>
     <text x="${PL}" y="${H - 6}">${tlabel(t0)}</text>
     <text x="${W - PR}" y="${H - 6}" text-anchor="end">${tlabel(t1)}</text>
-    <text x="${PL + iw / 2}" y="${H - 6}" text-anchor="middle">billed tokens, cumulative (line) · per-turn tokens (bars)</text>
+    ${legend}
+    <text x="${PL + iw / 2}" y="${H - 6}" text-anchor="middle">billed tokens, cumulative (line) · per-request tokens (bars)${
+      clickable ? ' · click to jump the timeline' : ''}</text>
   </svg>`;
 }
 function kfmt(v) {
@@ -1244,16 +1314,28 @@ $('#runSort').addEventListener('click', (e) => {
 // ---------------------------------------------------------------------------
 // detail overlay
 // ---------------------------------------------------------------------------
+// A session with no title of its own still deserves a name: the opening line of
+// its prompt says far more than eight hex digits do. Skips the XML-ish wrapper
+// tags a harness prepends, so the name is the first line a human wrote.
+function threadName(s) {
+  if (s.title) return s.title;
+  if (s.agentNickname) return 'agent ' + s.agentNickname;
+  const line = (s.firstUserText || '').split('\n')
+    .map(l => l.trim()).find(l => l && !/^<[/a-z]/i.test(l));
+  return line ? line.replace(/^#+\s*/, '').replace(/\s+/g, ' ') : s.id.slice(0, 8);
+}
+
 async function openDetail(id) {
   $('#overlay').classList.add('on');
   $('#detailBody').innerHTML = '<div class="empty">Loading…</div>';
   const r = await fetch('/api/session/' + encodeURIComponent(id)).then(x => x.json());
   if (r.error) { $('#detailBody').innerHTML = '<div class="empty">' + r.error + '</div>'; return; }
   const s = r.summary, tk = s.tokens || {};
-  const name = s.title || (s.agentNickname ? 'agent ' + s.agentNickname : s.id.slice(0, 8));
+  const name = threadName(s);
   const stats = s.commandStats || [];
+  $('#detailBody').dataset.id = id;   // lets a chart click tell "already open" from "open it"
   $('#detailBody').innerHTML = `
-    <h3 style="margin:0 0 4px">${esc(name)}</h3>
+    <h3 style="margin:0 0 4px" title="${attr(name)}">${esc(short(name, 72))}</h3>
     <div class="fpath">${esc(s.id)}</div>
     ${s.firstUserText ? `<div class="prompt"><span class="lbl">session prompt</span><p>${esc(s.firstUserText)}</p></div>` : ''}
     <dl class="kv">
@@ -1272,7 +1354,7 @@ async function openDetail(id) {
       <dt>context window</dt><dd>${fmt(s.contextWindow)} · raw counter now ${fmt(tk.total_tokens)}</dd>
       <dt>activity</dt><dd>${s.messageCount} msgs · ${s.toolCallCount} cmds · ${s.turnsCompleted}/${s.turnsStarted} turns</dd>
     </dl>
-    <div class="chartwrap">${consumptionChart(s.tokenSeries)}</div>
+    <div class="chartwrap">${consumptionChart(s.tokenSeries, null, true)}</div>
     ${stats.length ? `<p class="subh">Consumption by base command</p>
       <table><thead><tr><th>Base</th><th class="num">Runs</th>
         <th class="num" title="summed Tokens across every run of this base command">Command total</th></tr></thead>
@@ -1282,11 +1364,47 @@ async function openDetail(id) {
 }
 function evRow(e) {
   const t = hhmmss(e.ts);
-  if (e.kind === 'message') return `<div class="ev ${e.role}"><div class="et">${t} · ${e.role}</div><pre>${esc(e.text)}</pre></div>`;
-  if (e.kind === 'tool') return `<div class="ev tool"><div class="et">${t} · tool ${esc(e.name)}</div><pre>${esc(e.input)}</pre></div>`;
-  if (e.kind === 'reasoning') return `<div class="ev reasoning"><div class="et">${t} · reasoning</div><pre>${esc(e.text)}</pre></div>`;
-  if (e.kind === 'tokens') return `<div class="ev"><div class="et">${t} · tokens → ${fmt(e.total)}</div></div>`;
-  return `<div class="ev"><div class="et">${t} · ${esc(e.kind)}</div></div>`;
+  const ms = Date.parse(e.ts);
+  const a = isNaN(ms) ? '' : ` data-ev-time="${ms}"`;
+  if (e.kind === 'message') return `<div class="ev ${e.role}"${a}><div class="et">${t} · ${e.role}</div><pre>${esc(e.text)}</pre></div>`;
+  if (e.kind === 'tool') return `<div class="ev tool"${a}><div class="et">${t} · tool ${esc(e.name)}</div><pre>${esc(e.input)}</pre></div>`;
+  if (e.kind === 'reasoning') return `<div class="ev reasoning"${a}><div class="et">${t} · reasoning</div><pre>${esc(e.text)}</pre></div>`;
+  if (e.kind === 'tokens') return `<div class="ev"${a}><div class="et">${t} · tokens → ${fmt(e.total)}</div></div>`;
+  return `<div class="ev"${a}><div class="et">${t} · ${esc(e.kind)}</div></div>`;
+}
+
+// A click on a consumption chart scrolls the timeline to the moment it names —
+// the bars are per-turn, so the nearest event by timestamp is the landing spot.
+// Inside the overlay that timeline is already on screen; an Activity panel has
+// none of its own, so its chart carries the session id and opens it first.
+document.addEventListener('click', async (e) => {
+  const svg = e.target.closest('svg.chart[data-chart-clickable]');
+  if (!svg) return;
+  const box = svg.getBoundingClientRect();
+  const PL = 58, PR = 12, W = 800;
+  const frac = (e.clientX - box.left) / box.width;
+  const at = chartTimeAt(svg, (frac * W - PL) / (W - PL - PR));
+  if (at == null) return;
+  const id = svg.dataset.thread;
+  const showing = $('#overlay').classList.contains('on') && $('#detailBody').dataset.id === id;
+  if (id && !showing) await openDetail(id);
+  jumpToEvent(at);
+});
+// map a 0..1 position across the plot back to a timestamp, using the same time
+// span the chart was drawn from
+function chartTimeAt(svg, frac) {
+  const t0 = +svg.dataset.t0, t1 = +svg.dataset.t1;
+  if (!t0 || !t1) return null;
+  return t0 + Math.max(0, Math.min(1, frac)) * (t1 - t0);
+}
+function jumpToEvent(ms) {
+  const rows = [...document.querySelectorAll('#detailBody .ev[data-ev-time]')];
+  if (!rows.length) return;
+  const best = rows.reduce((a, b) =>
+    Math.abs(+b.dataset.evTime - ms) < Math.abs(+a.dataset.evTime - ms) ? b : a);
+  document.querySelectorAll('#detailBody .ev.jump').forEach(n => n.classList.remove('jump'));
+  best.classList.add('jump');
+  best.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 // ---------------------------------------------------------------------------
 // hover: full command history for the current agent turn
@@ -1357,6 +1475,7 @@ let trModel = '', trEffort = '';
 // The tables pick *what* is plotted; the chart stack picks *when*. Only one entity
 // at a time — two would need an intersection the rollups do not carry.
 let trendEntity = null;      // { kind: 'cmd' | 'prompt', key }
+let trendEntityDropped = '';  // name of a row filter auto-cleared by the last pick
 
 // populate a <select> with "All …" + options, preserving the current value
 function fillFacet(sel, values, cur, allLabel, isModel) {
@@ -1415,8 +1534,13 @@ async function trendPick(level, bucket) {
   const L = trendTrail[level];
   if (!L) return;
   trendTrail.length = level + 1;
+  trendEntityDropped = '';
   if (L.sel === bucket) { L.sel = null; renderTrends(); return; }
   L.sel = bucket;
+  // The slice is what you just asked for, so keep it and drop the row filter
+  // instead — otherwise picking a period the plotted row never ran in leaves
+  // every chart and table empty, with nothing to say why.
+  if (entityAbsentIn(L, bucket)) { trendEntityDropped = trendEntity.key; trendEntity = null; }
   const finer = FINER[L.period];
   const span = finer && bucketRange(L.period, bucket);
   if (!span) { renderTrends(); return; }         // nothing finer — the pick just filters
@@ -1581,6 +1705,13 @@ function entityRow(data) {
     ? (data.byCommand || []).find(r => r.base === trendEntity.key)
     : (data.byPrompt || []).find(r => r.prompt === trendEntity.key);
 }
+// does the plotted row have anything at all in this bucket?
+function entityAbsentIn(L, bucket) {
+  if (!trendEntity || !L.data) return false;
+  const row = entityRow(L.data);
+  const cell = row && row.per && row.per[bucket];
+  return !cell || !cell.tokens;
+}
 
 function trendCharts() {
   return trendTrail.map((L, i) => {
@@ -1622,6 +1753,8 @@ function scopeBar(trail, onClear) {
     <span class="when">${esc(sliceOf)}</span>
     ${trendEntity ? `<span class="chip" title="${attr(trendEntity.key)}">${esc(short(trendEntity.key, 48))}
       <button data-entity-clear="trend" title="show every command again">×</button></span>` : ''}
+    ${trendEntityDropped ? `<span class="dropped" title="${attr(trendEntityDropped)}"
+      >nothing here for <b>${esc(short(trendEntityDropped, 34))}</b> — showing everything</span>` : ''}
     <span class="what">${nums}</span>
     ${path ? `<span class="path">all → ${path}</span>` : '<span class="path"></span>'}
     ${p ? undoBtn(onClear) : ''}
@@ -1633,7 +1766,7 @@ function renderTrends() {
   const L0 = trendTrail[0];
   if (!L0 || !L0.data) return;
   // a refetch (period, facet, repo) can retire the selected row
-  if (trendEntity && !entityRow(L0.data)) trendEntity = null;
+  if (trendEntity && !entityRow(L0.data)) { trendEntityDropped = trendEntity.key; trendEntity = null; }
   const keepCf = (($('#cmdFilter') || {}).value) || '';
   const keepPf = (($('#promptFilter') || {}).value) || '';
   const d = L0.data;
@@ -1726,6 +1859,8 @@ document.addEventListener('click', (e) => {
   const sc = e.target.closest('[data-scope-clear], [data-scope-undo]');
   if (sc) {
     const which = sc.dataset.scopeClear || sc.dataset.scopeUndo;
+    if (which === 'trend') trendEntityDropped = '';
+    else if (which.startsWith('ct:')) ctGet(which.slice(3)).dropped = '';
     const trail = which === 'trend' ? trendTrail
       : which === 'hist' ? histTrail : ctGet(which.slice(3)).trail;
     if (sc.dataset.scopeUndo) {
@@ -1742,8 +1877,8 @@ document.addEventListener('click', (e) => {
   }
   const ec2 = e.target.closest('[data-entity-clear]');
   if (ec2) {
-    if (ec2.dataset.entityClear === 'trend') { trendEntity = null; renderTrends(); }
-    else { const b = ec2.dataset.entityClear.slice(3); ctGet(b).entity = null; ctRerender(b); }
+    if (ec2.dataset.entityClear === 'trend') { trendEntity = null; trendEntityDropped = ''; renderTrends(); }
+    else { const b = ec2.dataset.entityClear.slice(3); const st = ctGet(b); st.entity = null; st.dropped = ''; ctRerender(b); }
     return;
   }
   const tr = e.target.closest('.trow');
@@ -1754,6 +1889,7 @@ document.addEventListener('click', (e) => {
     const key = kind === 'cmd' ? r.base : r.prompt;
     trendEntity = (trendEntity && trendEntity.kind === kind && trendEntity.key === key)
       ? null : { kind, key };
+    trendEntityDropped = '';
     renderTrends();          // the charts above are what changed
     return;
   }
@@ -1826,7 +1962,7 @@ function ctGet(base) {
   if (!ctState.has(base)) ctState.set(base, {
     period: 'week', metric: 'delta', sub: true,
     model: ecoModel || trModel || '', effort: ecoEffort || trEffort || '',
-    data: null, loading: false, trail: [], entity: null,
+    data: null, loading: false, trail: [], entity: null, dropped: '',
   });
   return ctState.get(base);
 }
@@ -1850,8 +1986,11 @@ async function ctPick(base, level, bucket) {
   const L = s.trail[level];
   if (!L) return;
   s.trail.length = level + 1;
+  s.dropped = '';
   if (L.sel === bucket) { L.sel = null; ctRerender(base); return; }
   L.sel = bucket;
+  // same rule as the Trends chart: the slice you clicked wins, the row filter yields
+  if (ctEntityAbsentIn(s, L, bucket)) { s.dropped = s.entity.key; s.entity = null; }
   const finer = FINER[L.period];
   const span = finer && bucketRange(L.period, bucket);
   if (!span) { ctRerender(base); return; }
@@ -1863,6 +2002,14 @@ async function ctPick(base, level, bucket) {
   next.data = r.building ? null : r;
   next.failed = !!r.building;
   ctRerender(base);
+}
+// did the plotted invocation run at all in this bucket?
+function ctEntityAbsentIn(s, L, bucket) {
+  if (!s.entity || !L.data) return false;
+  const rows = (s.entity.kind === 'poll' ? L.data.pollTargets : L.data.samples) || [];
+  const row = rows.find(r => r.cmd === s.entity.key);
+  const cell = row && row.per && row.per[bucket];
+  return !cell || !cell.calls;
 }
 // id is "ct:<level>:<base>", and a base may itself contain a colon
 chartPickers.set('ct', (id, b) => {
@@ -1924,7 +2071,7 @@ function ctPanel(base) {
   const src = ctSource(s);
   const d = src.L.data, B = d.buckets, sel = src.sel;
   if (s.entity && !((s.entity.kind === 'poll' ? s.data.pollTargets : s.data.samples) || [])
-      .some(r => r.cmd === s.entity.key)) s.entity = null;
+      .some(r => r.cmd === s.entity.key)) { s.dropped = s.entity.key; s.entity = null; }
 
   // per-row (process / invocation) metric — there's no per-row Δ tokens, so
   // fall back to output tokens for the Δ view
@@ -1960,6 +2107,8 @@ function ctPanel(base) {
     <span class="when">${esc(pk ? bucketTitle(pk.period, pk.sel) : 'All time')}</span>
     ${s.entity ? `<span class="chip" title="${attr(s.entity.key)}">${esc(short(realCmd(s.entity.key), 48))}
       <button data-entity-clear="ct:${attr(base)}" title="show every invocation again">×</button></span>` : ''}
+    ${s.dropped ? `<span class="dropped" title="${attr(s.dropped)}"
+      >nothing here for <b>${esc(short(realCmd(s.dropped), 34))}</b> — showing everything</span>` : ''}
     <span class="what">${s.entity
       ? `${fmt((eRow && pk ? rpf(eRow.per[pk.sel], pk.sel) : eRow && eRow.out) || 0)} ${esc(lowerLbl(rowLabel))} · ${fmt((eRow && pk ? (eRow.per[pk.sel] || {}).calls : eRow && eRow.count) || 0)} calls`
       : pk ? `${fmt(ctMetricVal(pk.data, pk.sel, s.metric))} ${esc(lowerLbl(mLabel))} · ${fmt(pk.data.series.calls[pk.sel] || 0)} calls` : ''}</span>
@@ -2053,6 +2202,7 @@ document.addEventListener('click', (e) => {
     const s = ctGet(base);
     const key = row.dataset.ctRow, kind = row.dataset.ctKind;
     s.entity = (s.entity && s.entity.kind === kind && s.entity.key === key) ? null : { kind, key };
+    s.dropped = '';
     ctRerender(base);
   }
 });
@@ -2341,6 +2491,8 @@ function findingsHTML(a) {
         <select id="deepRunner">${runners.map(r => `<option value="${attr(r.id)}">${esc(r.label)}</option>`).join('')}</select>
         <select id="deepModel">${(runners[0].models || []).map(m => `<option value="${attr(m)}">${esc(m)}</option>`).join('')
           || '<option value="">default</option>'}</select>
+        <select id="deepEffort" title="how hard the model should think — costs more of your quota at the top end"
+          >${effortOpts(runners[0].efforts)}</select>
       </label>
     </div>` : ''}
     ${a.findings.map(f => `<div class="finding ${f.kind}" data-fid="${attr(f.id)}">
@@ -2379,11 +2531,17 @@ function deepHTML(d) {
   </div>`;
 }
 
+// each runner names its effort levels differently, so the list is rebuilt from
+// whichever one is selected; "default" leaves the flag off entirely
+const effortOpts = (efforts) => '<option value="">default effort</option>'
+  + (efforts || []).map(v => `<option value="${attr(v)}">${esc(v)}</option>`).join('');
+
 document.addEventListener('change', (e) => {
   if (e.target.id !== 'deepRunner' || !adviceData) return;
   const r = (adviceData.toolchain.runners || []).find(x => x.id === e.target.value);
   $('#deepModel').innerHTML = ((r && r.models) || []).map(m => `<option value="${attr(m)}">${esc(m)}</option>`).join('')
     || '<option value="">default</option>';
+  $('#deepEffort').innerHTML = effortOpts(r && r.efforts);
 });
 
 document.addEventListener('click', (e) => {
@@ -2395,8 +2553,9 @@ document.addEventListener('click', (e) => {
   if (slot) slot.innerHTML = deepHTML({ pending: true });
   const runner = ($('#deepRunner') || {}).value || 'claude';
   const model = ($('#deepModel') || {}).value || '';
+  const effort = ($('#deepEffort') || {}).value || '';
   fetch(`/api/deepen?id=${encodeURIComponent(id)}&runner=${encodeURIComponent(runner)}`
-    + `&model2=${encodeURIComponent(model)}&${ecoQS}`)
+    + `&model2=${encodeURIComponent(model)}&effort2=${encodeURIComponent(effort)}&${ecoQS}`)
     .then((x) => x.ok ? x.json() : Promise.reject(new Error(`the server answered ${x.status}`)))
     .then((d) => {
       deepened.set(id, d);

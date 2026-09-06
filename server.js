@@ -1486,14 +1486,17 @@ Reply with only this JSON:
 // waiting on a pipe that never fills. No shell, so nothing in the prompt is
 // interpreted. Neither runner is allowed to touch the filesystem — it is being
 // asked to read evidence it has already been handed, not to go looking.
-function runnerArgv(runner, model, prompt) {
+function runnerArgv(runner, model, effort, prompt) {
+  const eff = effortsFor(runner).includes(effort) ? effort : '';
   if (runner === 'codex') {
     return ['codex', ['exec', '--skip-git-repo-check', '-s', 'read-only',
-      ...(model ? ['-m', model] : []), prompt]];
+      ...(model ? ['-m', model] : []),
+      ...(eff ? ['-c', `model_reasoning_effort="${eff}"`] : []), prompt]];
   }
   return ['claude', ['-p', prompt, '--output-format', 'json',
     '--disallowed-tools', 'Bash', 'Edit', 'Write',
-    ...(model ? ['--model', model] : [])]];
+    ...(model ? ['--model', model] : []),
+    ...(eff ? ['--effort', eff] : [])]];
 }
 
 // A CLI's stdout is not necessarily JSON. Codex prints a banner, the reply, then
@@ -1532,7 +1535,7 @@ function codexTokens(text) {
   return m ? Number(m[1].replace(/,/g, '')) : null;
 }
 
-function deepen(finding, recs, tc, runner, model, cb) {
+function deepen(finding, recs, tc, runner, model, effort, cb) {
   const evidence = evidenceFor(finding.id, recs);
   if (!evidence) return cb({ error: 'no evidence to show a model for this finding' });
   if (!tc.runners.some((r) => r.id === runner)) {
@@ -1541,7 +1544,7 @@ function deepen(finding, recs, tc, runner, model, cb) {
   }
   const prompt = deepenPrompt(finding, evidence, tc);
   const started = Date.now();
-  const [bin, args] = runnerArgv(runner, model, prompt);
+  const [bin, args] = runnerArgv(runner, model, effort, prompt);
   const child = cp.execFile(bin, args,
     { encoding: 'utf8', timeout: 180000, maxBuffer: 8 << 20 },
     (err, stdout, stderr) => {
@@ -1622,10 +1625,17 @@ function tryExec(bin, args, timeout = 1500) {
 // process spawn so it is cached; the model list is derived from the rollups and
 // so is recomputed every time — at startup the inventory is taken before the
 // rollups have loaded, and a cached empty list would outlive the reason for it.
+// efforts are each CLI's own vocabulary: Claude Code takes --effort, Codex takes
+// a model_reasoning_effort config override. Both lists are allowlists — the value
+// reaches an argv, and for Codex it is a config key, so an unchecked string there
+// could set any other config too.
 const RUNNERS = [
-  { id: 'claude', label: 'Claude Code', bin: 'claude', aliases: ['opus', 'sonnet', 'haiku'] },
-  { id: 'codex', label: 'Codex CLI', bin: 'codex', aliases: [] },
+  { id: 'claude', label: 'Claude Code', bin: 'claude', aliases: ['opus', 'sonnet', 'haiku'],
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+  { id: 'codex', label: 'Codex CLI', bin: 'codex', aliases: [],
+    efforts: ['low', 'medium', 'high', 'xhigh', 'ultra'] },
 ];
+const effortsFor = (id) => (RUNNERS.find((r) => r.id === id) || {}).efforts || [];
 
 function modelsFor(id) {
   const seen = new Set();
@@ -1642,7 +1652,7 @@ function modelsFor(id) {
 
 const detectRunners = () => AI_DISABLED ? []
   : RUNNERS.filter((r) => tryExec(r.bin, ['--version']))
-    .map((r) => ({ id: r.id, label: r.label, models: [] }));
+    .map((r) => ({ id: r.id, label: r.label, models: [], efforts: r.efforts || [] }));
 
 // the models a runner offers change as the history does, so fill them in fresh
 const withModels = (tc) => {
@@ -1847,6 +1857,7 @@ const server = http.createServer((req, res) => {
 
     const runner = q.get('runner') || 'claude';
     const model = q.get('model2') || '';
+    const effort2 = q.get('effort2') || '';
     const key = id + '|' + url.search;
     if (deepCache.has(key)) return json(res, 200, { ...deepCache.get(key), cached: true });
 
@@ -1854,7 +1865,7 @@ const server = http.createServer((req, res) => {
     const recs = pickSessions(includeSub, q.get('model') || '', q.get('effort') || '',
       q.get('source') || '', q.get('repo') || '')
       .filter((r) => !cutoff || new Date(r.startedAt).getTime() >= cutoff);
-    return deepen(finding, recs, a.toolchain, runner, model, (out) => {
+    return deepen(finding, recs, a.toolchain, runner, model, effort2, (out) => {
       if (!out.error) deepCache.set(key, out);
       json(res, 200, out);
     });
