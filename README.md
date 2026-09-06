@@ -103,6 +103,10 @@ back to session start time and say so.
 charts above, shown as a chip you can clear on its own. The two filters compose: one time slice,
 one subject.
 
+Pick a slice the plotted row never ran in and the slice wins: the row filter is dropped and you
+land on what actually ran then, rather than on empty charts and empty tables with nothing to say
+why. The scope bar names what it let go, so the reset is never silent.
+
 ### Activity
 
 Refreshed every 2s over Server-Sent Events.
@@ -113,7 +117,8 @@ tokens today / this week and the live total. The weekly % is also mirrored into 
 status line.
 
 One panel *per active agent* (any session written to in the last 15s, or mid-turn). Collapsed
-by default so many agents fit on one screen; click the ▸ caret to expand.
+by default so many agents fit on one screen; click the **details** chip — or anywhere on the
+header row — to expand.
 
 Subagents show their **lineage** — `spawned by <parent> › <grandparent> › … › this` — walked up
 `parent_thread_id` to the root user prompt, each hop clickable. Codex's auto-approval reviewer
@@ -121,7 +126,13 @@ appears here as a `guardian` child of the thread whose actions it's vetting.
 
 Collapsed shows: title, age, active-turn flag, a one-line token/ctx/cmd/turn summary,
 project · model · effort · tier, the latest message, and the **consumption-over-time chart**
-(cumulative tokens as area/line, per-turn tokens as bars).
+(cumulative tokens as area/line, per-request tokens as stacked bars).
+
+**Clicking a chart opens the timeline at that moment.** The x-position maps back to a timestamp,
+and the nearest event is scrolled to and highlighted. An Activity panel has no timeline of its
+own, so its chart opens that session's detail panel first; inside the panel the chart stays
+pinned to the top, since the first jump would otherwise scroll away the thing you aim the second
+one with.
 
 Expanded adds: cwd + full badges, the full **session prompt** and latest message, the token
 breakdown (total / ctx window / in / cached / out / reasoning), and two tables —
@@ -137,6 +148,14 @@ drops back to ~0 whenever the conversation is compacted, so a long session's raw
 sawtooths and *undercounts* the total. burnboard instead tracks its own monotonic running sum of
 per-request tokens (`last_token_usage`) — that's the "billed tokens" figure and the consumption
 chart's line. Compaction points are marked on the chart with a dashed rule.
+
+**What the bars are made of.** Each bar is one request, stacked over the four disjoint buckets it
+is billed in: cache read, cache write, input, output. Cache read — the conversation resent every
+turn — is typically 90–99% of the total, which is why an unstacked bar looked much the same turn
+after turn: it was really plotting how large the conversation had grown, which the line already
+says. It sits muted at the base so the buckets billed at full rate read against the bar's top
+edge. Codex bills no cache creation, so that segment is absent there. Hovering a bar gives the
+exact split.
 
 Hovering the prompt line (or a card's `$` command line) pops the **full command history for the
 current turn** — every command and follow-up the agent has run since the last `task_started`,
@@ -154,7 +173,8 @@ table to it and drill into its hours. Opens on the most recent bucket.
 Table of every session in that slice (started, thread, prompt, project, model, kind, billed
 tokens, commands) with a totals bar. **Click any column header to sort.** Click a row for the
 detail panel: full message/tool/reasoning timeline, the consumption chart, base-command
-breakdown, metadata.
+breakdown, metadata. The panel is titled by thread — a session with no title of its own is named
+from the first real line of its prompt, since a hex id says nothing.
 
 ### Trends
 
@@ -214,9 +234,13 @@ names, never values, since those files hold credentials. No model is involved: e
 computed from your own history, so nothing is invented.
 
 **Diving deeper** is optional and never automatic. If an assistant CLI is installed, each finding
-offers to have one read the actual commands behind it — you choose which (Claude Code or Codex)
-and which model, and nothing runs until you click. It gets a small evidence window, not your
-history: the twenty commands around a poll run, the distinct invocations that re-read a file.
+offers to have one read the actual commands behind it — you choose which (Claude Code or Codex),
+which model, and how hard it should think, and nothing runs until you click. The effort levels
+are each CLI's own vocabulary (Claude Code takes `--effort`, Codex a `model_reasoning_effort`
+override), so the list changes with the runner; leave it on *default effort* to pass no flag.
+
+It gets a small evidence window, not your history: the twenty commands around a poll run, the
+distinct invocations that re-read a file.
 
 The model annotates a finding; it never adds one. It inherits that finding's numbers, cannot
 reorder the list, and is given no field to put a figure in — so the ranking stays measured. Any
@@ -299,7 +323,7 @@ is source-agnostic and simply carries a `source` tag through to the UI.
 | `GET /api/agents?range=all\|30d\|7d&by=agent\|role\|model\|effort\|project` | per-agent-type spend, efficiency rates and command-class mix |
 | `GET /api/economy?range=all\|30d\|7d&subagents=0\|1&source=codex\|claude` | token-economy signals from the same rollups |
 | `GET /api/advice?range=&subagents=&model=&effort=&source=&repo=` | findings for the same slice as `/api/economy`, plus the detected toolchain |
-| `GET /api/deepen?id=<finding>&runner=claude\|codex&model2=` | runs the chosen local assistant over one finding's evidence (opt-in; spends your quota; 403 under `--no-ai`) |
+| `GET /api/deepen?id=<finding>&runner=claude\|codex&model2=&effort2=` | runs the chosen local assistant over one finding's evidence (opt-in; spends your quota; 403 under `--no-ai`) |
 | `GET /api/facets` | the model / effort / repo values the filters offer |
 
 Every session record carries `source` (`"codex"` or `"claude"`). The aggregate endpoints accept
