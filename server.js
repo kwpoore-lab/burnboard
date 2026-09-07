@@ -45,6 +45,8 @@ const IDLE_MS = 5 * 60 * 1000; // yellow dot
 // ---------------------------------------------------------------------------
 const createCodexSource = require('./lib/sources/codex');
 const createClaudeSource = require('./lib/sources/claude');
+const { tallyStats } = require('./lib/cmdtally');
+const { rateFor, costOf } = require('./lib/pricing');
 const SOURCES = [createCodexSource({ argVal }), createClaudeSource({ argVal })];
 // How far back per-command timestamps go. A source reporting null keeps them for
 // the whole transcript, so sub-day drilling is exact over all history; one that
@@ -165,18 +167,6 @@ function buildTurns(sum) {
   return out;
 }
 
-function commandStats(cmds) {
-  const m = new Map();
-  for (const c of cmds) {
-    const g = m.get(c.base) || { base: c.base, count: 0, tokens: 0, lastReq: 0, lastTs: null };
-    g.count++;
-    g.tokens += c.delta;
-    g.lastReq += c.last || 0;
-    if (!g.lastTs || c.ts > g.lastTs) g.lastTs = c.ts;
-    m.set(c.base, g);
-  }
-  return [...m.values()].sort((a, b) => b.tokens - a.tokens || b.count - a.count);
-}
 
 // Resolve a session id to a short label from whatever we know about it.
 function sessionLabel(id) {
@@ -221,6 +211,7 @@ function decorate(sum, full) {
   const age = Date.now() - (sum.mtimeMs || 0);
   const cmds = full ? buildCommands(sum) : null;
   const src = SOURCE_BY_ID.get(sum.source);
+  const rate = rateFor(sum.primaryModel);
   return {
     id: sum.id,
     source: sum.source,
@@ -273,7 +264,13 @@ function decorate(sum, full) {
     lastExec: sum.lastExec,
     commands: cmds ? cmds.slice(-150) : undefined,
     turns: cmds && !cmds.length ? buildTurns(sum).slice(-150) : undefined,
-    commandStats: cmds ? commandStats(cmds) : undefined,
+    // whole-session, not just the 300 commands the ring buffer still holds
+    commandStats: cmds ? tallyStats(sum).map((g) => ({ ...g, cost: costOf(g.cls, rate) })) : undefined,
+    // token counts split by billing class, and what they cost at this model's
+    // rates — null rate means the model isn't in the table, and the UI says so
+    tokenClasses: sum.tokClasses,
+    rate,
+    cost: costOf(sum.tokClasses, rate),
   };
 }
 
@@ -355,7 +352,7 @@ let building = false;
 let rollupReady = false;
 let buildProgress = { done: 0, total: 0 };
 
-const ROLLUP_VERSION = 20;   // bump to force a full re-scan when the parser changes
+const ROLLUP_VERSION = 21;   // bump to force a full re-scan when the parser changes
 function loadRollupCache() {
   try {
     const j = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
@@ -958,12 +955,19 @@ function commandTrend(base, period, includeSub, model, effort, source, from, to,
     return t >= from && t < to;
   });
   const buckets = seedBuckets(period, from, to);
-  const series = { outTokens: {}, calls: {}, truncated: {}, delta: {} };
+  const series = { outTokens: {}, calls: {}, truncated: {}, delta: {}, cost: {} };
   const bump = (k, b, v) => { series[k][b] = (series[k][b] || 0) + v; };
   const sampMap = new Map();
   const pollMap = new Map();
   const isPoll = ['write_stdin', 'wait', 'wait_agent', 'exec_command'].includes(base);
   let totals = { outTokens: 0, calls: 0, truncated: 0, delta: 0, sessions: 0 };
+  // Cost has to be priced per session, not once at the end: this window mixes
+  // models, and an hour of Haiku next to an hour of Opus has no single rate.
+  // Sessions on models missing from the table are counted in `unpriced` so the
+  // UI can say the total is partial rather than quietly under-reporting.
+  const cls = { i: 0, cc: 0, o: 0 };
+  const cost = { i: 0, cc: 0, o: 0, total: 0 };
+  const priced = { sessions: 0, unpriced: 0, models: new Set() };
 
   for (const r of recs) {
     const g = (r.outByBase || {})[base];
@@ -977,6 +981,17 @@ function commandTrend(base, period, includeSub, model, effort, source, from, to,
       totals.outTokens += g.tokens; totals.calls += g.calls; totals.truncated += g.truncated;
     }
     if (dc) { bump('delta', b, dc.tokens); totals.delta += dc.tokens; }
+    if (dc && dc.cls) {
+      cls.i += dc.cls.i || 0; cls.cc += dc.cls.cc || 0; cls.o += dc.cls.o || 0;
+      const rate = rateFor(r.model);
+      if (!rate) priced.unpriced++;
+      else {
+        priced.sessions++; priced.models.add(rate.id);
+        const c = costOf(dc.cls, rate);
+        cost.i += c.i; cost.cc += c.cc; cost.o += c.o; cost.total += c.total;
+        bump('cost', b, c.total);
+      }
+    }
 
     for (const s of (r.samples && r.samples[base]) || []) {
       const e = sampMap.get(s.cmd) || (sampMap.set(s.cmd, { cmd: s.cmd, count: 0, out: 0, trunc: 0, per: {} }).get(s.cmd));
@@ -993,10 +1008,38 @@ function commandTrend(base, period, includeSub, model, effort, source, from, to,
       }
     }
   }
+  // A total on a single-command screen answers nothing — $11.85 is neither good
+  // nor bad. What makes it readable is the unit (cost per call) set against the
+  // same unit for every other command in this window, so "expensive" means
+  // expensive *compared to what you otherwise run*.
+  const peers = [];
+  for (const r of recs) {
+    const rate = rateFor(r.model);
+    if (!rate) continue;
+    for (const c of r.cmds || []) {
+      if (!c.cls || !c.count) continue;
+      const p = peers.find((x) => x.base === c.base) || (peers.push({ base: c.base, cost: 0, calls: 0 }), peers[peers.length - 1]);
+      p.cost += costOf(c.cls, rate).total;
+      p.calls += c.count;
+    }
+  }
+  const rated = peers.filter((p) => p.calls && p.cost > 0)
+    .map((p) => ({ base: p.base, per: p.cost / p.calls }))
+    .sort((a, b) => b.per - a.per);
+  const mid = rated.length ? rated[Math.floor(rated.length / 2)].per : 0;
+  const me = rated.find((p) => p.base === base);
+  const peer = {
+    perCall: me ? me.per : null,
+    median: mid || null,
+    rank: me ? rated.indexOf(me) + 1 : null,
+    of: rated.length,
+    dearest: rated.length ? rated[0] : null,
+  };
   return {
     base, period,
     buckets: [...buckets].sort(),
     series, totals,
+    cls, cost, priced: { ...priced, models: [...priced.models] }, peer,
     samples: [...sampMap.values()].sort((a, b) => b.out - a.out || b.count - a.count).slice(0, 15),
     pollTargets: [...pollMap.values()].sort((a, b) => b.out - a.out || b.count - a.count).slice(0, 12),
     facets: rollupFacets(),

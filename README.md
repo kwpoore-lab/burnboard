@@ -139,7 +139,10 @@ breakdown (total / ctx window / in / cached / out / reasoning), and two tables �
 
 - **Commands, latest first**: time · command · Δ tokens (consumed after that step) · running total
 - **Consumption by base command**: the same commands grouped by base verb with parameters
-  stripped (`git status`, `sed`, `apply_patch`, `rg`, …) — runs + summed Δ tokens, biggest first
+  stripped (`git status`, `sed`, `apply_patch`, `rg`, …) — runs + summed Δ tokens, biggest first.
+  Tallied as commands arrive rather than from the Commands table above it, which is a ring buffer
+  capped at the last 300 calls — a long session's rollup would otherwise describe only its tail.
+  A `tokens` / `list rate` tab switches the column between token counts and dollars
 
 "% ctx" is the last request's input tokens over the model context window (real occupancy).
 
@@ -156,6 +159,13 @@ after turn: it was really plotting how large the conversation had grown, which t
 says. It sits muted at the base so the buckets billed at full rate read against the bar's top
 edge. Codex bills no cache creation, so that segment is absent there. Hovering a bar gives the
 exact split.
+
+**The x axis counts requests, not clock time.** Each slot is one request, evenly spaced. Agent
+sessions are bursty — six idle hours then forty requests in five minutes — and on a time axis the
+idle stretch eats the plot while the burst is crushed into a few pixels at the right edge. On a
+usage axis the forty requests get forty bars. The end labels still give real start and end times,
+and clicking still lands on a real moment: each slot carries its own timestamp, so a click picks
+the slot rather than interpolating across a gap the chart no longer draws.
 
 Hovering the prompt line (or a card's `$` command line) pops the **full command history for the
 current turn** — every command and follow-up the agent has run since the last `task_started`,
@@ -279,6 +289,50 @@ History, Trends, Agents and Economy share a one-time streaming scan of every ses
 timestamp, which is what makes sub-day drilling exact over all history — roughly 30MB and 170MB
 resident for ~124k commands. Bumping `ROLLUP_VERSION` invalidates it and re-scans once.
 
+## Cost, and what it isn't
+
+The consumption-by-base-command panel has a `tokens` / `list rate` lens, and the per-command
+drill-down prices itself. The dollars come from an explicit rate table in `lib/pricing.js` — per
+model, per billing class, per million tokens.
+
+**The four classes bill at rates that differ by 50×.** Taking a model's base input price as 1×:
+cache read is 0.1× (0.025× on Fable 5.1), uncached input 1×, cache write 1.25× at the default
+5-minute TTL (2× at 1h — it costs *more* than sending the tokens uncached, and breaks even on the
+second read), and output 5× on an Opus-tier model. OpenAI has no write premium: caching there is
+a read discount only. So a raw token count and a dollar figure rank sessions differently — on a
+typical session cache read is ~97% of the tokens and ~66% of the cost, while output is 0.3% of
+the tokens and 11% of the cost.
+
+**These dollars are not a bill.** Every place they appear says so, and names your live quota
+windows when it can see them: a percentage-of-quota window (Claude's `~/.claude.json`, Codex's
+`rate_limits`) means the account is on a plan and is not billed per token at all. What the figure
+means is *what these tokens would have cost on metered API billing* — useful for ratios, for
+comparing commands, and for knowing what an agent would cost if you moved it onto the API. Under
+a plan the marginal cost of a token is zero until a window fills, and then the window is the cost,
+not money.
+
+**Costs are priced per session, at that session's own model.** A week's window mixes Opus, Sonnet
+and Codex sessions; there is no single rate for it. Sessions whose model is missing from the table
+are counted and declared (`+ 2 sessions on an unpriced model — not in the total`) rather than
+silently dropped, and an unknown model makes the lens say so instead of inventing a number.
+
+**Cache read is excluded from per-command costs.** It is the conversation resent for every
+request — shared by the whole session, caused by no single command. The panel reconciles the
+difference out loud rather than leaving a gap: *Σ $11.38 across these commands · the session cost
+$57.39, the other $46.01 being cache read.*
+
+**On a single command, the unit is cost per call.** A total is unreadable on its own — $11.85 is
+neither good nor bad. The command panel gives the per-call cost set against the median command in
+the same window, which separates the two ways something gets expensive:
+
+| | |
+|---|---|
+| `python3` | $0.039/call — **2.5× the median every time it runs**; output is 76% of it |
+| `write_stdin` | $0.0091/call — **0.6× the median**; its $214 total is volume: 23,377 calls |
+| `TaskOutput` | $0.301/call — **20× the median**; cache write is 100% of it |
+
+Three different problems with three different fixes, none of which a total could tell you apart.
+
 ## How it works
 
 Each agent gets its own ingestion module under `lib/sources/` (`codex.js`, `claude.js`) that
@@ -295,7 +349,14 @@ is source-agnostic and simply carries a `source` tag through to the UI.
   real shell string (string, array, or template-literal form, plus `apply_patch`).
 - Per-command token cost is approximate. For Codex, tokens accrue between a command and the next
   `token_count` event. For Claude Code, one assistant turn's `usage` block covers all of that
-  turn's tool calls at once, so the turn's new tokens are split evenly across them.
+  turn's tool calls at once, so the turn's new tokens are split evenly across them. The same even
+  split is kept per billing class, so a command can be priced at each class's own rate rather than
+  a blended one.
+- Per-base-command totals are tallied in `lib/cmdtally.js` as commands arrive, not derived from
+  `sum.commands` — that array is a ring buffer holding the last 300 calls, and anything computed
+  from it silently covers only the tail of a long session.
+- Rates live in one table (`lib/pricing.js`), matched by model-id prefix so dated suffixes
+  (`claude-haiku-4-5-20251001`) resolve. An unmatched model returns no rate rather than a guess.
 
 ### Codex vs. Claude Code
 

@@ -124,6 +124,41 @@
   .chart text { fill: var(--dim); font: 10px var(--mono); }
   .cols { display: grid; grid-template-columns: 1.35fr 1fr; gap: 14px; margin-top: 12px; }
   @media (max-width: 860px) { .cols { grid-template-columns: 1fr; } }
+  .subtabs { display: inline-flex; gap: 2px; margin-left: 10px; vertical-align: middle; }
+  .subtabs button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--dim);
+    font: inherit; font-size: 10px; text-transform: uppercase; letter-spacing: .8px;
+    padding: 1px 6px 2px; cursor: pointer; }
+  .subtabs button:hover { color: var(--fg); }
+  .subtabs button.on { color: var(--accent); border-bottom-color: var(--accent); }
+  .verdict { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline;
+    font-size: 12px; color: var(--dim); margin: 8px 0 0; padding: 7px 9px 6px;
+    background: var(--panel2); border-radius: 4px 4px 0 0; }
+  .verdict .big { color: var(--accent); font-size: 15px; font-weight: 600; }
+  .verdict i { font-style: normal; text-transform: uppercase; letter-spacing: .6px; opacity: .7; font-size: 10px; }
+  .verdict .v { color: var(--fg); }
+  .verdict b.dear { color: var(--yellow); }
+  .verdict b.cheap { color: var(--green); }
+  .verdict .at { margin-left: auto; opacity: .7; font-size: 11px; }
+  .verdict + .classline { margin-top: 0; border-radius: 0 0 4px 4px; }
+  .notbill { font-size: 11px; line-height: 1.5; color: var(--dim); margin: 0 0 8px;
+    padding: 5px 8px; border-left: 2px solid var(--yellow); background: var(--panel2); border-radius: 0 4px 4px 0; }
+  .notbill b { color: var(--yellow); font-weight: 600; }
+  .classline { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline;
+    font-size: 11px; color: var(--dim); margin: -2px 0 10px; padding: 6px 8px;
+    background: var(--panel2); border-radius: 4px; }
+  .classline i { font-style: normal; text-transform: uppercase; letter-spacing: .6px; opacity: .75; }
+  .classline b { color: var(--fg); font-weight: 600; }
+  .classline em { font-style: normal; opacity: .6; }
+  .classline .tot b { color: var(--accent); }
+  .classline .at { margin-left: auto; opacity: .7; }
+  .classline .norate { color: var(--yellow); margin-left: auto; }
+  .rates { font-size: 11px; color: var(--dim); margin: 0 0 6px; padding: 4px 7px;
+    background: var(--panel2); border-radius: 4px; }
+  .rates b { color: var(--fg); font-weight: 600; }
+  .rates .norate { color: var(--yellow); }
+  .reconcile { font-size: 11px; color: var(--dim); margin: 6px 0 0; line-height: 1.5; }
+  .reconcile b { color: var(--fg); font-weight: 600; }
+  tfoot td { border-top: 1px solid var(--border); color: var(--dim); font-weight: 600; }
   .subh { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--dim); margin: 0 0 6px; }
 
   table { width: 100%; border-collapse: collapse; }
@@ -822,6 +857,141 @@ function lineageLine(t) {
   return `<div class="lineage">${kind ? `<span class="badge agent">${esc(kind)}</span> ` : ''}spawned by ${crumbs} <span class="sep">›</span> <b>this</b></div>`;
 }
 
+// ---------------------------------------------------------------------------
+// tokens / cost lens
+//
+// The same numbers read two ways: a raw token count answers "how hard is this
+// session working", dollars answer "what did it cost" — and they rank sessions
+// differently, because cache read is ~95% of the count and a tenth of the rate.
+// Rather than print both everywhere, the consumption panel gets a tab strip and
+// switches units in place; the tabs are a lens, not another place to hide
+// things, so nothing is reachable only by clicking.
+// ---------------------------------------------------------------------------
+let unit = 'tok';   // 'tok' | 'usd'
+function setUnit(u) {
+  if (unit === u) return;
+  unit = u;
+  if (lastSnap) render(lastSnap);
+  if (lastDetail) renderDetail(lastDetail);
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.subtabs button[data-unit]');
+  if (b) { e.stopPropagation(); setUnit(b.dataset.unit); }
+});
+// Are we looking at metered billing or a plan?
+//
+// Claude Code caches the account's quota windows in ~/.claude.json, and Codex
+// reports rate_limits the same way. Percentage-of-quota windows mean a
+// subscription: the account is not billed per token at all, so every dollar
+// this page prints is a *list-rate equivalent* — what these tokens would have
+// cost on metered API billing — and never an amount anyone was charged. Under a
+// plan the marginal cost of a token is zero until a window fills, and then the
+// real cost is the window, not money. Say so wherever dollars appear; a figure
+// like $213.88 reads as a bill unless it is told not to.
+function winLbl(w) {
+  const m = w.window_minutes;
+  return m >= 10080 ? 'week' : m >= 1440 ? Math.round(m / 1440) + 'd' : Math.round(m / 60) + 'h';
+}
+// the one line that must never be mistaken for a bill. agentLimits() already
+// normalises both shapes (Codex primary/secondary, Claude's windows array), so
+// a plan on either agent is enough to know these dollars were never charged.
+function notBill() {
+  const plans = lastSnap ? agentLimits(lastSnap) : [];
+  const now = plans.map(p => `${esc(p.label)} ${p.windows
+    .map(w => `${winLbl(w)} <b>${Math.round(w.used_percent)}%</b>`).join(' / ')}`).join(' · ');
+  return `<p class="notbill"><b>List-rate equivalent — not what you paid.</b>
+    ${plans.length ? `This account bills by quota window, not per token — ${now} used right now.
+        The dollars here are what the same tokens would cost on metered API billing;
+        under a plan a token costs nothing until a window fills, and then the window is the cost.`
+      : `These are public API list rates — what the same tokens would cost on metered billing.
+        If this account runs on a subscription, nothing here was charged per token.`}</p>`;
+}
+
+// dollars, at a scale that stays readable from cents to four figures
+function usd(v) {
+  if (v == null || isNaN(v)) return '–';
+  if (v >= 100) return '$' + Math.round(v).toLocaleString();
+  if (v >= 1) return '$' + v.toFixed(2);
+  if (v >= 0.01) return '$' + v.toFixed(3);
+  return v > 0 ? '&lt;$0.01' : '$0';   // escaped: a bare '<' opens a tag
+}
+// per-call costs are routinely sub-cent, where usd()'s "<$0.01" throws away the
+// only interesting digits — this is the unit the drill-down is built on
+function usdFine(v) {
+  if (v == null || isNaN(v)) return '–';
+  if (v >= 1) return usd(v);
+  if (v >= 0.01) return '$' + v.toFixed(3);
+  return '$' + v.toFixed(4);
+}
+const unitTabs = () => `<span class="subtabs">
+  <button data-unit="tok" class="${unit === 'tok' ? 'on' : ''}">tokens</button>
+  <button data-unit="usd" class="${unit === 'usd' ? 'on' : ''}"
+    title="what these tokens would cost at metered API list rates — not an amount billed">list rate</button></span>`;
+
+// ---------------------------------------------------------------------------
+// consumption by base command
+//
+// The Tokens a command is charged is the request's genuinely NEW tokens —
+// uncached input + cache write + output — shared out across the tool calls of
+// that request. It is deliberately NOT the billed figure in the header: every
+// request resends the whole context, so billed is mostly cache read that no
+// single command owns. The two never match, so the table says which one it is
+// and reconciles itself against the billed total rather than leaving the reader
+// to wonder where the other 95% went.
+// ---------------------------------------------------------------------------
+function baseCmdTable(stats, t, withLast) {
+  if (!stats.length) return '<table><tbody><tr><td class="empty">–</td></tr></tbody></table>';
+  const money = unit === 'usd' && t.rate;
+  const val = (g) => money ? usd(g.cost.total) : fmt(g.tokens);
+  const tot = stats.reduce((a, g) => a + g.tokens, 0);
+  const totC = stats.reduce((a, g) => a + (g.cost ? g.cost.total : 0), 0);
+  const runs = stats.reduce((a, g) => a + g.count, 0);
+  const rows = money ? stats.slice().sort((a, b) => b.cost.total - a.cost.total) : stats;
+  return `${unit === 'usd' ? rateLine(t) : ''}<table><thead><tr>
+      <th>Base</th><th class="num">Runs</th>
+      <th class="num" title="${money ? 'what this base command\'s tokens would cost at this model\'s list rates — not an amount billed'
+        : 'summed new tokens across every run of this base command'}">${money ? 'List $' : 'New tokens'}</th>
+      ${withLast ? '<th class="num">Last</th>' : ''}</tr></thead>
+    <tbody>${rows.map(g => `<tr>
+      <td class="base"><span class="cmdlink" data-cmd="${esc(g.base)}">${esc(g.base)}</span></td>
+      <td class="num">${g.count}</td>
+      <td class="num">${val(g)}</td>
+      ${withLast ? `<td class="num">${hhmmss(g.lastTs)}</td>` : ''}</tr>`).join('')}
+    </tbody>
+    <tfoot><tr>
+      <td>${fmt(runs)} runs</td><td></td>
+      <td class="num">${money ? usd(totC) : fmt(tot)}</td>${withLast ? '<td></td>' : ''}</tr></tfoot></table>
+  ${unit === 'usd' ? rateNote(t, totC) : tokenNote(t, tot)}`;
+}
+// tokens view: where the rest of the billed count went
+function tokenNote(t, tot) {
+  if (!t.cumReqTokens) return '';
+  const cache = Math.max(0, t.cumReqTokens - tot);
+  return `<p class="reconcile">Σ <b>${fmt(tot)}</b> new tokens (uncached input + cache write + output) ·
+    the session billed <b>${fmt(t.cumReqTokens)}</b>, the other <b>${fmt(cache)}</b> being context resent
+    from cache on every request — shared by the whole session, owned by no one command.</p>`;
+}
+// The rates every dollar below was computed from. It sits ABOVE the rows: the
+// table can run to dozens of lines, and the key to reading a column belongs
+// next to the tab that summoned it, not past a screenful of numbers.
+function rateLine(t) {
+  const r = t.rate;
+  if (!r) return `<p class="rates"><span class="norate">No rates for ${esc(t.primaryModel || 'this model')}</span>
+    — add it to lib/pricing.js and the cost view fills in. Showing tokens.</p>`;
+  return `<p class="rates"><b>${esc(r.id)}</b> list rates per Mtok:
+      in <b>$${r.in}</b> · cache write <b>$${r.write}</b> · cache read <b>$${r.read}</b> · out <b>$${r.out}</b></p>
+    ${notBill()}`;
+}
+// cost view: the same reconciliation as the tokens view, in money
+function rateNote(t, totC) {
+  const c = t.cost;
+  if (!t.rate || !c) return '';
+  const rest = Math.max(0, c.total - totC);
+  return `<p class="reconcile">Σ <b>${usd(totC)}</b> across these commands ·
+    the session cost <b>${usd(c.total)}</b>, the other <b>${usd(rest)}</b> being cache read
+    (${fmt(t.tokenClasses.cr)} tok at the read rate) plus tokens no command caused.</p>`;
+}
+
 function focusBlock(t, depth) {
   const nested = depth > 0;
   const name = t.title || (t.agentNickname ? 'agent ' + t.agentNickname
@@ -914,18 +1084,8 @@ function focusBlock(t, depth) {
                 <td title="${attr(t2.text)}">${esc(short(t2.text || '—', 120))}</td>
                 <td class="num">${t2.delta ? fmt(t2.delta) : '·'}</td></tr>`).join('')}
               </tbody></table></div>` : `
-            <p class="subh">Consumption by base command (params ignored)</p>
-            <table><thead><tr>
-              <th>Base</th><th class="num">Runs</th>
-              <th class="num" title="summed Tokens across every run of this base command">Command total</th>
-              <th class="num">Last</th></tr></thead>
-              <tbody>${stats.length ? stats.map(g => `<tr>
-                <td class="base"><span class="cmdlink" data-cmd="${esc(g.base)}">${esc(g.base)}</span></td>
-                <td class="num">${g.count}</td>
-                <td class="num">${fmt(g.tokens)}</td>
-                <td class="num">${hhmmss(g.lastTs)}</td></tr>`).join('')
-                : '<tr><td colspan="4" class="empty">–</td></tr>'}
-              </tbody></table>`}
+            <p class="subh">Consumption by base command ${unitTabs()}</p>
+            ${baseCmdTable(stats, t, true)}`}
           </div>
         </div>
       </div>
@@ -973,8 +1133,11 @@ function consumptionChart(series, H, clickable, threadId) {
   const iw = W - PL - PR, ih = H - PT - PB;
   const times = series.map(p => Date.parse(p.t) || 0);
   const t0 = times[0], t1 = times[times.length - 1] || t0 + 1;
-  const span = (t1 - t0) || 1;
-  const x = (t) => PL + ((t - t0) / span) * iw;
+  // usage-scaled x: one slot per request, not per clock tick. A session that
+  // idles for six hours and then burns 40 requests in five minutes should show
+  // 40 evenly spaced bars, not a wall of them crushed against the right edge.
+  const slots = Math.max(1, series.length - 1);
+  const x = (i) => PL + (i / slots) * iw;
 
   // running billed total: prefer server-computed `cum`, else accumulate `last`
   let acc = 0;
@@ -988,9 +1151,9 @@ function consumptionChart(series, H, clickable, threadId) {
   const base = minC - pad, cMax = rawRange + pad * 2;
   const yC = (v) => PT + ih - ((v - base) / cMax) * ih;
 
-  let d = `M ${x(times[0]).toFixed(1)} ${yC(cum[0]).toFixed(1)}`;
-  cum.forEach((v, i) => { d += ` L ${x(times[i]).toFixed(1)} ${yC(v).toFixed(1)}`; });
-  const area = d + ` L ${x(times[times.length - 1]).toFixed(1)} ${(PT + ih).toFixed(1)} L ${x(times[0]).toFixed(1)} ${(PT + ih).toFixed(1)} Z`;
+  let d = `M ${x(0).toFixed(1)} ${yC(cum[0]).toFixed(1)}`;
+  cum.forEach((v, i) => { d += ` L ${x(i).toFixed(1)} ${yC(v).toFixed(1)}`; });
+  const area = d + ` L ${x(slots).toFixed(1)} ${(PT + ih).toFixed(1)} L ${x(0).toFixed(1)} ${(PT + ih).toFixed(1)} Z`;
 
   const bw = Math.max(1, iw / series.length * 0.6);
   // Stacked bottom-up, biggest bucket first: cache read is usually ~90%+ of a
@@ -1003,7 +1166,7 @@ function consumptionChart(series, H, clickable, threadId) {
     const tot = barVal(p);
     if (!tot) return '';
     const bh = (tot / lastMax) * ih * 0.55;
-    const bx = (x(times[i]) - bw / 2).toFixed(1);
+    const bx = (x(i) - bw / 2).toFixed(1);
     if (!stacked)
       return `<rect x="${bx}" y="${(PT + ih - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="var(--purple)" opacity="0.2"/>`;
     let y = PT + ih;
@@ -1019,8 +1182,8 @@ function consumptionChart(series, H, clickable, threadId) {
   }).join('');
 
   const marks = series.map((p, i) => p.reset
-    ? `<line x1="${x(times[i]).toFixed(1)}" y1="${PT}" x2="${x(times[i]).toFixed(1)}" y2="${PT + ih}" stroke="var(--yellow)" stroke-width="1" stroke-dasharray="3 2"/>
-       <text x="${x(times[i]).toFixed(1)}" y="${PT + 9}" text-anchor="middle" fill="var(--yellow)">compacted</text>` : '').join('');
+    ? `<line x1="${x(i).toFixed(1)}" y1="${PT}" x2="${x(i).toFixed(1)}" y2="${PT + ih}" stroke="var(--yellow)" stroke-width="1" stroke-dasharray="3 2"/>
+       <text x="${x(i).toFixed(1)}" y="${PT + 9}" text-anchor="middle" fill="var(--yellow)">compacted</text>` : '').join('');
 
   let grid = '';
   for (let g = 0; g <= 4; g++) {
@@ -1039,6 +1202,7 @@ function consumptionChart(series, H, clickable, threadId) {
   // threadId marks a chart whose timeline lives elsewhere — the handler opens
   // that session before jumping, rather than searching the page it sits on
   const chartClass = clickable ? ` data-chart-clickable="1" data-t0="${t0}" data-t1="${t1}"`
+    + ` data-times="${times.join(',')}"`
     + (threadId ? ` data-thread="${attr(threadId)}"` : '') : '';
 
   return `<svg class="chart"${chartClass} viewBox="0 0 ${W} ${H}" style="height:${H}px" preserveAspectRatio="none">
@@ -1048,7 +1212,7 @@ function consumptionChart(series, H, clickable, threadId) {
     <text x="${PL}" y="${H - 6}">${tlabel(t0)}</text>
     <text x="${W - PR}" y="${H - 6}" text-anchor="end">${tlabel(t1)}</text>
     ${legend}
-    <text x="${PL + iw / 2}" y="${H - 6}" text-anchor="middle">billed tokens, cumulative (line) · per-request tokens (bars)${
+    <text x="${PL + iw / 2}" y="${H - 6}" text-anchor="middle">billed tokens, cumulative (line) · per-request tokens (bars) · x = requests${
       clickable ? ' · click to jump the timeline' : ''}</text>
   </svg>`;
 }
@@ -1325,11 +1489,19 @@ function threadName(s) {
   return line ? line.replace(/^#+\s*/, '').replace(/\s+/g, ' ') : s.id.slice(0, 8);
 }
 
+// the last payload the overlay drew, so flipping the tokens/cost lens re-renders
+// from what we already have instead of re-reading a 20MB transcript
+let lastDetail = null;
 async function openDetail(id) {
   $('#overlay').classList.add('on');
   $('#detailBody').innerHTML = '<div class="empty">Loading…</div>';
   const r = await fetch('/api/session/' + encodeURIComponent(id)).then(x => x.json());
-  if (r.error) { $('#detailBody').innerHTML = '<div class="empty">' + r.error + '</div>'; return; }
+  if (r.error) { lastDetail = null; $('#detailBody').innerHTML = '<div class="empty">' + r.error + '</div>'; return; }
+  renderDetail(r);
+}
+function renderDetail(r) {
+  lastDetail = r;
+  const id = r.summary.id;
   const s = r.summary, tk = s.tokens || {};
   const name = threadName(s);
   const stats = s.commandStats || [];
@@ -1355,10 +1527,8 @@ async function openDetail(id) {
       <dt>activity</dt><dd>${s.messageCount} msgs · ${s.toolCallCount} cmds · ${s.turnsCompleted}/${s.turnsStarted} turns</dd>
     </dl>
     <div class="chartwrap">${consumptionChart(s.tokenSeries, null, true)}</div>
-    ${stats.length ? `<p class="subh">Consumption by base command</p>
-      <table><thead><tr><th>Base</th><th class="num">Runs</th>
-        <th class="num" title="summed Tokens across every run of this base command">Command total</th></tr></thead>
-      <tbody>${stats.map(g => `<tr><td class="base"><span class="cmdlink" data-cmd="${esc(g.base)}">${esc(g.base)}</span></td><td class="num">${g.count}</td><td class="num">${fmt(g.tokens)}</td></tr>`).join('')}</tbody></table>` : ''}
+    ${stats.length ? `<p class="subh">Consumption by base command ${unitTabs()}</p>
+      ${baseCmdTable(stats, s, true)}` : ''}
     <h2 style="border:0">Timeline (${r.events.length}) — latest first</h2>
     ${r.events.slice().reverse().map(evRow).join('')}`;
 }
@@ -1393,9 +1563,15 @@ document.addEventListener('click', async (e) => {
 // map a 0..1 position across the plot back to a timestamp, using the same time
 // span the chart was drawn from
 function chartTimeAt(svg, frac) {
+  const f = Math.max(0, Math.min(1, frac));
+  // the x axis counts requests, so a position picks a slot, and the slot's own
+  // timestamp is the moment to land on — interpolating over the clock span
+  // would point at a gap the chart never drew
+  const times = (svg.dataset.times || '').split(',').filter(Boolean).map(Number);
+  if (times.length) return times[Math.round(f * (times.length - 1))];
   const t0 = +svg.dataset.t0, t1 = +svg.dataset.t1;
   if (!t0 || !t1) return null;
-  return t0 + Math.max(0, Math.min(1, frac)) * (t1 - t0);
+  return t0 + f * (t1 - t0);
 }
 function jumpToEvent(ms) {
   const rows = [...document.querySelectorAll('#detailBody .ev[data-ev-time]')];
@@ -1450,7 +1626,7 @@ document.addEventListener('mousemove', (e) => {
   else if (!$('#tip').hidden) moveTip(e);
 });
 
-function closeDetail() { $('#overlay').classList.remove('on'); }
+function closeDetail() { $('#overlay').classList.remove('on'); lastDetail = null; }
 $('#overlay').addEventListener('click', (e) => { if (e.target.id === 'overlay') closeDetail(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetail(); });
 
@@ -2124,7 +2300,7 @@ function ctPanel(base) {
     <span><b>${fmt(t.calls)}</b> calls</span>
     <span><b>${fmt(t.truncated)}</b> truncated</span>
     <span style="margin-left:auto">${B.length} ${perLblN(s.period)} · ${fmt(t.sessions)} sessions</span>
-  </div>`;
+  </div>${classBreakdown(s.data)}`;
 
   // a picked bucket collapses each invocation row to what it did in that slice
   const cut = (rows) => !sel ? rows : rows
@@ -2164,6 +2340,58 @@ function ctPanel(base) {
   return ctrls + grand + charts + scope
     + (samplesTbl || pollsTbl
       || `<p class="blurb">Nothing ran in this slice.${pk ? ' ' + undoBtn('ct:' + base, 'inline') : ''}</p>`);
+}
+
+// What this command costs — and whether that is worth your attention.
+//
+// A total is unreadable on its own: $11.85 is neither good nor bad. Two numbers
+// make it mean something. The unit is cost PER CALL, compared against the median
+// command in the same window, which separates the two ways a command gets
+// expensive — dear every time it runs, versus cheap but run constantly. Then the
+// class split says which half of the transaction the money is in: input (the
+// model reads a lot back) or output (the model writes a lot to make the call).
+// Priced per session at that session's own model, since a window mixes models.
+function classBreakdown(d) {
+  if (!d || !d.cls || !d.cost) return '';   // hour-level drill has no class data
+  const parts = [
+    { k: 'i', label: 'input' },
+    { k: 'cc', label: 'cache write' },
+    { k: 'o', label: 'output' },
+  ].filter(p => d.cls[p.k] > 0);
+  if (!parts.length) return '';
+  const pr = d.priced || {}, pe = d.peer || {};
+  const share = (k) => d.cost.total ? Math.round(100 * d.cost[k] / d.cost.total) : 0;
+  const top = parts.slice().sort((a, b) => d.cost[b.k] - d.cost[a.k])[0];
+  const ratio = pe.perCall && pe.median ? pe.perCall / pe.median : null;
+  const calls = d.totals.calls || 0;
+
+  // the sentence the screen exists to say
+  let verdict = '';
+  if (ratio != null) {
+    const x = ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1);
+    verdict = ratio >= 1.5
+      ? `<b class="dear">${x}× the median command</b> every time it runs — ${top.label} is ${share(top.k)}% of that.`
+      : ratio <= 0.75
+        ? `<b class="cheap">${x}× the median</b> — this total is volume, not price: ${fmt(calls)} calls.`
+        : `about the median command per call (<b>${x}×</b>) — ${top.label} is ${share(top.k)}% of the cost.`;
+  }
+  return `<p class="verdict">${pe.perCall != null
+      ? `<b class="big">${usdFine(pe.perCall)}</b> <i>per call</i>` : ''}
+    <span class="v">${verdict}</span>
+    ${pe.rank ? `<span class="at">${pe.rank}${ord(pe.rank)} dearest of ${fmt(pe.of)} commands</span>` : ''}</p>
+  <p class="classline">${parts.map(p =>
+      `<span><i>${p.label}</i> ${fmt(d.cls[p.k])} tok <b>${usd(d.cost[p.k])}</b> <em>${share(p.k)}%</em></span>`).join('')}
+    <span class="tot"><i>${fmt(calls)} calls</i> <b>${usd(d.cost.total)}</b></span>
+    ${pr.unpriced ? `<span class="norate">+ ${fmt(pr.unpriced)} session${pr.unpriced === 1 ? '' : 's'}
+      on an unpriced model — not in the total</span>`
+      : pr.models && pr.models.length > 1
+        ? `<span class="at">at ${pr.models.length} models\u2019 own rates</span>`
+        : pr.models && pr.models.length ? `<span class="at">at ${esc(pr.models[0])} rates</span>` : ''}
+    <span class="at">cache read excluded — no one command owns it</span></p>${notBill()}`;
+}
+function ord(n) {
+  const t = n % 100;
+  return (t >= 11 && t <= 13) ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th';
 }
 
 // inline block for an expanded Economy "By command" row
