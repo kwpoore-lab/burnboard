@@ -3,7 +3,7 @@
 
 /*
  * burnboard — live + historical monitor for Codex CLI and Claude Code usage
- * Zero dependencies. Node stdlib only.
+ * Local-only monitoring; MessagePack session caches, optional local tokenizer.
  *
  *   node server.js [--port 4317] [--root ~/.codex] [--claude-root ~/.claude] [--no-ai] [--local-tokens]
  *
@@ -348,31 +348,16 @@ function timeline(uuid) {
 // ---------------------------------------------------------------------------
 // trends — per-session rollups aggregated over day / week / month
 // ---------------------------------------------------------------------------
-const CACHE_FILE = path.join(__dirname, '.cache', 'rollups.json');
 let rollupCache = null;           // { sessions: Map<id, rec> }
 let building = false;
 let rollupReady = false;
 let buildProgress = { done: 0, total: 0 };
 
 const ROLLUP_VERSION = 22;   // bump to force a full re-scan when the parser changes
+const rollupStore = require('./lib/rollup-cache')({ root: path.join(__dirname, '.cache'),
+  version: ROLLUP_VERSION, policy: TEXT_TOKEN_POLICY });
 function loadRollupCache() {
-  try {
-    const j = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
-    if (j.version !== ROLLUP_VERSION) throw new Error('stale');
-    if (JSON.stringify(j.textTokenPolicy) !== JSON.stringify(TEXT_TOKEN_POLICY)) throw new Error('counting policy changed');
-    rollupCache = { sessions: new Map(Object.entries(j.sessions || {})) };
-  } catch (_) {
-    rollupCache = { sessions: new Map() };
-  }
-}
-function saveRollupCache() {
-  try {
-    fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
-    fs.writeFileSync(CACHE_FILE, JSON.stringify({
-      version: ROLLUP_VERSION, sessions: Object.fromEntries(rollupCache.sessions),
-      textTokenPolicy: TEXT_TOKEN_POLICY,
-    }));
-  } catch (e) { console.warn('rollup cache save failed:', e.message); }
+  rollupCache = { sessions: rollupStore.load() };
 }
 
 async function refreshRollups() {
@@ -390,17 +375,23 @@ async function refreshRollups() {
       live.add(id);
       const ex = rollupCache.sessions.get(id);
       if (!ex || ex.mtime !== st.mtimeMs || ex.size !== st.size) {
-        rollupCache.sessions.set(id, await source.scanSession(fp, st));
+        const record = await source.scanSession(fp, st);
+        rollupCache.sessions.set(id, record);
+        rollupStore.set(id, record);
         if (++changed % 100 === 0) console.log(`  rollups: scanned ${changed}/${files.length}…`);
       }
       buildProgress.done++;
     }
-    for (const id of [...rollupCache.sessions.keys()]) if (!live.has(id)) rollupCache.sessions.delete(id);
+    for (const id of [...rollupCache.sessions.keys()]) if (!live.has(id)) {
+      rollupCache.sessions.delete(id);
+      rollupStore.delete(id);
+    }
     if (changed) {
       forgetRepoKeys();
-      saveRollupCache();
       console.log(`  rollups: ${changed} sessions (re)scanned, ${rollupCache.sessions.size} total`);
     }
+    // Retry only failed session writes, even if no transcript changed this tick.
+    rollupStore.save();
     rollupReady = true;
   } finally {
     building = false;

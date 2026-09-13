@@ -8,8 +8,8 @@ and [Claude Code](https://claude.com/claude-code), side by side.**
 
 burnboard tails the JSONL session transcripts both tools write locally — Codex to
 `~/.codex/sessions/`, Claude Code to `~/.claude/projects/` — and turns them into a local web
-dashboard. No account access, no API keys, nothing sent anywhere. Zero dependencies, Node stdlib
-only.
+dashboard. No account access, no API keys, nothing sent anywhere. One required dependency
+for local MessagePack caching; an optional tokenizer for offline text counts.
 
 Every view carries an **All agents / Codex / Claude Code** toggle and a **repository picker**:
 see one tool or one codebase in isolation, or everything together in a single combined view with
@@ -37,11 +37,12 @@ context resent on every turn.
 
 ## Run
 
-Requires Node ≥ 18. The default monitor needs no dependencies or installation.
+Requires Node ≥ 18. Run `npm install` before starting the monitor.
 
 ```bash
 git clone https://github.com/kwpoore-lab/burnboard
 cd burnboard
+npm install
 node server.js            # -> http://localhost:4317
 ```
 
@@ -64,7 +65,7 @@ node token-count.js --encoding o200k_base /absolute/path/report.json
 `js-tiktoken@1.0.21` is an optional dependency with bundled encoding assets. Installing it
 requires the registry once; counting afterward requires no network, API key, inference or report
 upload. It works under `--no-ai`. Without it, the monitor still works. Installation with
-`npm install --omit=optional` keeps the dependency-free monitor.
+`npm install --omit=optional` installs the MessagePack cache dependency without the tokenizer.
 
 The Economy view separates `tokenized` logged text from `estimated` outputs and reports UTF-8
 bytes for each method. The pinned package's exact model map selects an encoding; unsupported,
@@ -324,7 +325,13 @@ only what ran and what came back.
 
 History, Trends, Agents and Economy share a one-time streaming scan of every session file
 (~70s for ~1100 sessions across ~12GB of transcripts; only parses relevant lines), cached to
-`.cache/rollups.json` and refreshed incrementally after. The cache keeps every command's
+unencrypted `.cache/rollups/<parser-and-counting-policy-hash>/<session-id-hash>.msgpack`
+files and refreshed incrementally after. Only changed sessions are written, with atomic
+replacement; failed writes are retried without rescanning unchanged sessions. Corrupt
+session files are rescanned independently. The former `.cache/rollups.json` is ignored
+and left untouched; the first start after upgrading rebuilds the cache from transcripts.
+Binary encoding is not encryption: these files contain local session metadata and command
+details, so treat them with the same privacy care as the transcripts. The cache keeps every command's
 timestamp, which is what makes sub-day drilling exact over all history — roughly 30MB and 170MB
 resident for ~124k commands. Bumping `ROLLUP_VERSION` invalidates it and re-scans once.
 
