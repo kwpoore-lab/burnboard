@@ -2895,8 +2895,11 @@ function renderEconomy() {
       </tbody></table>
     </div>
 
-    <p class="blurb" style="margin-top:20px">Token counts for command output are estimated (~4 chars/token) from the
-      logged tool results. Model reasoning is encrypted in the logs, so the "why" behind each step isn't shown — only what ran and what came back.</p>`;
+    <p class="blurb" style="margin-top:20px">Command-output counts cover logged text only, not request billing or hidden pre-truncation output.
+      ${d.textTokenPolicy && d.textTokenPolicy.local ? 'Local tokenization is enabled for models mapped by the pinned tokenizer; this does not verify the live consumer mapping.' : 'Local tokenization is off; counts use the ~4 chars/token estimate.'}
+      Recorded request usage remains separate.</p>
+    <p class="blurb">${Object.entries(d.textTokenMeasurements || {}).map(([key, row]) =>
+      `${esc(row.status)} (${esc(key)}): ${fmt(row.calls)} outputs, ${fmt(row.tokens)} text tokens, ${fmt(row.bytes)} UTF-8 bytes`).join('<br>')}</p>`;
 }
 
 $('#ecoRange').addEventListener('click', (e) => {

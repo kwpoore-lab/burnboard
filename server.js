@@ -5,7 +5,7 @@
  * burnboard — live + historical monitor for Codex CLI and Claude Code usage
  * Zero dependencies. Node stdlib only.
  *
- *   node server.js [--port 4317] [--root ~/.codex] [--claude-root ~/.claude] [--no-ai]
+ *   node server.js [--port 4317] [--root ~/.codex] [--claude-root ~/.claude] [--no-ai] [--local-tokens]
  *
  *   --no-ai   never call an assistant. No CLI is probed for, none is offered,
  *             and /api/deepen refuses. Everything else is unaffected: findings
@@ -30,6 +30,8 @@ const PORT = parseInt(argVal('--port', process.env.PORT || '4317'), 10);
 // assistant CLI, nothing offered in the UI, and the endpoint refuses — so
 // burnboard cannot spend a token on your behalf even by accident.
 const AI_DISABLED = args.includes('--no-ai') || process.env.BURNBOARD_NO_AI === '1';
+const LOCAL_TOKENS = args.includes('--local-tokens');
+const TEXT_TOKEN_POLICY = require('./lib/text-tokens').countingPolicy(LOCAL_TOKENS);
 
 const TICK_MS = 2000;          // rescan cadence
 const LIVE_WINDOW_MS = 15 * 60 * 1000;   // show in live feed if touched within this
@@ -47,7 +49,7 @@ const createCodexSource = require('./lib/sources/codex');
 const createClaudeSource = require('./lib/sources/claude');
 const { tallyStats } = require('./lib/cmdtally');
 const { rateFor, costOf } = require('./lib/pricing');
-const SOURCES = [createCodexSource({ argVal }), createClaudeSource({ argVal })];
+const SOURCES = [createCodexSource({ argVal, localTokens: LOCAL_TOKENS }), createClaudeSource({ argVal, localTokens: LOCAL_TOKENS })];
 // How far back per-command timestamps go. A source reporting null keeps them for
 // the whole transcript, so sub-day drilling is exact over all history; one that
 // reports a window makes older sub-day ranges fall back to bucketing each session
@@ -352,11 +354,12 @@ let building = false;
 let rollupReady = false;
 let buildProgress = { done: 0, total: 0 };
 
-const ROLLUP_VERSION = 21;   // bump to force a full re-scan when the parser changes
+const ROLLUP_VERSION = 22;   // bump to force a full re-scan when the parser changes
 function loadRollupCache() {
   try {
     const j = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
     if (j.version !== ROLLUP_VERSION) throw new Error('stale');
+    if (JSON.stringify(j.textTokenPolicy) !== JSON.stringify(TEXT_TOKEN_POLICY)) throw new Error('counting policy changed');
     rollupCache = { sessions: new Map(Object.entries(j.sessions || {})) };
   } catch (_) {
     rollupCache = { sessions: new Map() };
@@ -367,6 +370,7 @@ function saveRollupCache() {
     fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
     fs.writeFileSync(CACHE_FILE, JSON.stringify({
       version: ROLLUP_VERSION, sessions: Object.fromEntries(rollupCache.sessions),
+      textTokenPolicy: TEXT_TOKEN_POLICY,
     }));
   } catch (e) { console.warn('rollup cache save failed:', e.message); }
 }
@@ -841,11 +845,16 @@ function economy(sinceMs, includeSub, model, effort, source, repo) {
     truncatedCalls: 0, dupeRuns: 0, dupeTokens: 0, modelOutput: 0, modelReasoning: 0 };
   const byBase = new Map();
   const bigOutputs = [];
+  const textTokenMeasurements = {};
   const dupes = [];
   const pollSessions = [];
 
   for (const r of recs) {
     tot.outTokens += r.outTokens || 0;
+    for (const [key, row] of Object.entries(r.textTokenMeasurements || {})) {
+      const target = textTokenMeasurements[key] || (textTokenMeasurements[key] = { ...row, calls: 0, tokens: 0, bytes: 0 });
+      target.calls += row.calls; target.tokens += row.tokens; target.bytes += row.bytes;
+    }
     tot.toolCalls += r.toolCalls || 0;
     tot.pollTurns += r.pollTurns || 0;
     tot.modelOutput += r.totals.output || 0;
@@ -894,6 +903,8 @@ function economy(sinceMs, includeSub, model, effort, source, repo) {
   return {
     building: !rollupReady, progress: buildProgress,
     totals: tot,
+    textTokenPolicy: TEXT_TOKEN_POLICY,
+    textTokenMeasurements,
     byCommand,
     bigOutputs: bigOutputs.sort((a, b) => b.tokens - a.tokens).slice(0, 40),
     dupes: dupes.sort((a, b) => b.tokens - a.tokens).slice(0, 40),
@@ -1969,7 +1980,10 @@ server.listen(PORT, () => {
     if (!s.looksLikeHome()) console.warn(`    warning: no data dir found here for ${s.label}`);
     console.log(`    watching ${s.watching}`);
   }
-  console.log(`  http://localhost:${PORT}`);
+  console.log(`  http://localhost:${server.address().port}`);
+  console.log(`  text tokens → ${LOCAL_TOKENS
+    ? TEXT_TOKEN_POLICY.tokenizer || 'tokenizer not installed; explicitly labeled estimates'
+    : 'estimates (~4 chars/token); opt in with --local-tokens'}`);
   // Warm the inventory off the hot path. It only decides which *optional* extras
   // are offered, so it must never delay serving — and none of it is required for
   // burnboard to do its job.
